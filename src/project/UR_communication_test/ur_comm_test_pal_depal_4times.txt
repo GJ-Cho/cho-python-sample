@@ -1,0 +1,75 @@
+ 프로그램
+   변수 설정
+   BeforeStart
+     지정 conveyor_on=켜짐
+     count≔0
+     2FG 놓기 (36.7)
+     MoveJ
+       robot_pose_1
+     write_output_integer_register(24,count)
+     write_output_boolean_register(64,False)
+   로봇 프로그램
+     기다림 read_input_boolean_register(125)
+     count≔count+1
+     write_output_integer_register(24,count)
+     write_output_boolean_register(64,True)
+     read_input_boolean_register(125)
+     4회 Loop:
+       6회 Loop:
+         MoveJ
+           웨이포인트_2
+         MoveL
+           웨이포인트_1
+           2FG 그립 (23.7)
+           웨이포인트_2
+         Pallet_1
+           패턴
+             Grid_Pattern_1
+               CornerItem_1
+               CornerItem_2
+               CornerItem_3
+               CornerItem_4
+           레이어
+           각각의 아이템
+             생성된 이동
+               MoveJ
+                 Approach
+               MoveL
+                 ToolActionPoint
+               Tool action
+                 2FG 놓기 (36.7)
+               MoveL
+                 Exit
+       6회 Loop:
+         Pallet_2
+           패턴
+             Grid_Pattern_2
+               CornerItem_5
+               CornerItem_6
+               CornerItem_7
+               CornerItem_8
+           레이어
+           각각의 아이템
+             생성된 이동
+               MoveJ
+                 Approach
+               MoveL
+                 ToolActionPoint
+               Tool action
+                 2FG 그립 (23.7)
+               MoveL
+                 Exit
+         MoveJ
+           웨이포인트_4
+         MoveL
+           웨이포인트_3
+           2FG 놓기 (36.7)
+           웨이포인트_4
+       count≔count+1
+       write_output_integer_register(24,count)
+     기다림: 0.5
+     write_output_integer_register(24,-1)
+     MoveJ
+       robot_pose_1
+     지정 conveyor_on=꺼짐
+     Halt

@@ -1,0 +1,27 @@
+ 프로그램
+   변수 설정
+   BeforeStart
+     MoveJ
+       robot_pose_1
+     write_output_integer_register(24,0)
+     write_output_boolean_register(64,False)
+   로봇 프로그램
+     기다림 read_input_boolean_register(65)
+     write_output_integer_register(24,1)
+     write_output_boolean_register(64,True)
+     read_input_boolean_register(65)
+     MoveJ
+       웨이포인트_1
+     MoveL
+       웨이포인트_2
+       웨이포인트_1
+     MoveJ
+       웨이포인트_3
+     MoveL
+       웨이포인트_4
+       웨이포인트_3
+     기다림: 0.5
+     write_output_integer_register(24,-1)
+     MoveJ
+       robot_pose_1
+     Halt
