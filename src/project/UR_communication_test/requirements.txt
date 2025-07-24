@@ -1,0 +1,5 @@
+numpy
+keyboard
+pandas
+scipy
+-e ./3rdParty/rtde-2.7.2/ setup.py
