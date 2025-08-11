@@ -87,7 +87,7 @@ def _create_normal_map(frame: zivid.Frame,) -> typing.Any:
 
     Returns:
         normals_map_bgr: Any Normal map image \n 
-        cv2.imshow("Depth map before transform", normals_map_bgr)
+        cv2.imshow("Normal map", normals_map_bgr)
 
     """
     point_cloud = frame.point_cloud()
@@ -99,6 +99,69 @@ def _create_normal_map(frame: zivid.Frame,) -> typing.Any:
     normals_map_bgr = cv2.cvtColor(normals_colormap, cv2.COLOR_RGBA2BGR) # (RGB > BGR)
 
     return normals_map_bgr
+
+
+def _create_custom_colormap():
+    """Create custom colormap for red-green colorblind friendly visualization.
+    Please refer to 1.Red-green Variation #1 in the following website.
+    https://visualisingdata.com/2019/08/five-ways-to-design-for-red-green-colour-blindness/
+
+    Returns:
+        Custom colormap array for OpenCV
+    """
+    # Red-green Variation #1 colors (BGR format for OpenCV)
+    colors = np.array([
+        [37, 67, 219],    # DB4325
+        [71, 162, 237],   # EDA247  
+        [188, 225, 230],  # E6E1BC
+        [173, 196, 87],   # 57C4AD
+        [100, 97, 0]      # 006164
+    ], dtype=np.uint8)
+    
+    # Create 256-entry colormap by interpolating between colors
+    colormap = np.zeros((256, 1, 3), dtype=np.uint8)
+    for i in range(256):
+        # Map to color index (0-4)
+        pos = i / 255.0 * 4
+        idx = int(pos)
+        frac = pos - idx
+        if idx >= 4:
+            idx = 3
+            frac = 1.0
+        if frac == 0.0:
+            colormap[i, 0] = colors[idx]
+        else:
+            # Linear interpolation between adjacent colors
+            colormap[i, 0] = colors[idx] * (1 - frac) + colors[idx + 1] * frac
+    
+    return colormap
+
+
+def _create_snr_map(frame: zivid.Frame,) -> typing.Any:
+    """Create SNR map from Point cloud.
+
+    Args:
+        frame: A frame captured by a Zivid camera
+
+    Returns:
+        snr_map_bgr: Any SNR map image \n 
+        cv2.imshow("SNR map", snr_map_bgr)
+
+    """
+    point_cloud = frame.point_cloud()
+    snr = point_cloud.copy_data("snr")
+    mask_zero = (snr == 0)
+    snr = np.minimum(snr, 64)
+    log_snr = np.log2(snr, where=(snr > 0), out=np.zeros_like(snr, dtype=float))
+    log_snr[~mask_zero] += 1
+
+    snr_uint8 = (log_snr / 7.0 * 255).astype(np.uint8)
+    custom_colormap = _create_custom_colormap()
+    snr_map_bgr = cv2.applyColorMap(snr_uint8, custom_colormap)
+    
+    snr_map_bgr[np.isnan(snr)[:, :]] = 0
+
+    return snr_map_bgr
 
 
 def _convert_2_ply(frame: zivid.Frame, file_path: Path) -> None:
@@ -156,6 +219,10 @@ def _main() -> None:
             normalmap = _create_normal_map(frame)
             normal_image_file = dir + "/" + file.stem + "_normal.png"
             cv2.imwrite(normal_image_file , normalmap)
+
+            snr_map = _create_snr_map(frame)
+            snr_image_file = dir + "/" + file.stem + "_snr.png"
+            cv2.imwrite(snr_image_file , snr_map)
 
 if __name__ == "__main__":
     _main()
