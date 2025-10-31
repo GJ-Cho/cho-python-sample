@@ -1,0 +1,82 @@
+def ur_comm_test():
+  set_tool_communication(False, 115200, 0, 1, 1.5, 3.5)
+  set_tool_output_mode(0)
+  set_tool_digital_output_mode(0, 1)
+  set_tool_digital_output_mode(1, 1)
+  set_tool_voltage(0)
+  set_safety_mode_transition_hardness(1)
+  set_standard_analog_input_domain(0, 1)
+  set_standard_analog_input_domain(1, 1)
+  set_tool_analog_input_domain(0, 1)
+  set_tool_analog_input_domain(1, 1)
+  set_analog_outputdomain(0, 0)
+  set_analog_outputdomain(1, 0)
+  set_input_actions_to_default()
+  step_count_2474f514_8b0e_4ce1_ac42_d905788f8b59 = 0.0
+  thread Step_Counter_Thread_7e02c80b_0e75_47af_94c4_e56e099eb4e6():
+    while (True):
+      step_count_2474f514_8b0e_4ce1_ac42_d905788f8b59 = step_count_2474f514_8b0e_4ce1_ac42_d905788f8b59 + 1.0
+      sync()
+    end
+  end
+  run Step_Counter_Thread_7e02c80b_0e75_47af_94c4_e56e099eb4e6()
+  set_gravity([0.0, 0.0, 9.82])
+  set_tcp(p[0.0,0.0,0.0,0.0,0.0,0.0])
+  set_payload(0.2)
+  # begin: URCap Installation Node
+  #   Source: External Control, 1.0.5, FZI Research Center for Information Technology
+  #   Type: External Control
+  # end: URCap Installation Node
+  global Counter=0
+  global robot_pose_1_p=p[.537259944106, .181733685473, .515774104045, -3.102972175112, -.039822556433, -.083617653076]
+  global robot_pose_1_q=[0.559477329254154, -1.6973659000792427, -1.3835973739624015, -1.56679518640553, 1.5793595314025772, -1.0327170530902228]
+  while (True):
+    $ 2 "Robot Program"
+    $ 3 "MoveJ"
+    $ 4 "robot_pose_1" "breakAfter"
+    movej(get_inverse_kin(robot_pose_1_p, qnear=robot_pose_1_q), a=0.2617993877991494, v=0.2617993877991494)
+    $ 5 "write_output_integer_register(24,0)"
+    write_output_integer_register(24,0)
+    $ 6 "write_output_boolean_register(64,False)"
+    write_output_boolean_register(64,False)
+    $ 7 "Wait read_input_boolean_register(65)"
+    while (not(read_input_boolean_register(65))):
+      sync()
+    end
+    $ 8 "read_input_boolean_register(65)"
+    read_input_boolean_register(65)
+    $ 9 "'Reading x,y,z,rx,ry,rz valuse'"
+    # 'Reading x,y,z,rx,ry,rz valuse'
+    $ 10 "x≔read_input_float_register(24)"
+    global x=read_input_float_register(24)
+    $ 11 "y≔read_input_float_register(25)"
+    global y=read_input_float_register(25)
+    $ 12 "z≔read_input_float_register(26)"
+    global z=read_input_float_register(26)
+    $ 13 "rx≔read_input_float_register(27)"
+    global rx=read_input_float_register(27)
+    $ 14 "ry≔read_input_float_register(28)"
+    global ry=read_input_float_register(28)
+    $ 15 "rz≔read_input_float_register(29)"
+    global rz=read_input_float_register(29)
+    $ 16 "start_pose≔get_actual_tcp_pose()"
+    global start_pose= get_actual_tcp_pose ()
+    $ 17 "target_pose≔p[x,y,z,rx,ry,rz]"
+    global target_pose=p[x,y,z,rx,ry,rz]
+    $ 18 "movel(target_pose, a=1.0, v=1.0, t=0, r=0)"
+    movel(target_pose, a=1.0, v=1.0, t=0, r=0)
+    $ 19 "Wait pose_dist(target_pose, get_actual_tcp_pose())<0.01"
+    while (not( pose_dist (target_pose,  get_actual_tcp_pose ())<0.01)):
+      sync()
+    end
+    $ 20 "Wait: 0.5"
+    sleep(0.5)
+    $ 21 "write_output_integer_register(24,-1)"
+    write_output_integer_register(24,-1)
+    $ 22 "MoveJ"
+    $ 23 "robot_pose_1" "breakAfter"
+    movej(get_inverse_kin(robot_pose_1_p, qnear=robot_pose_1_q), a=0.2617993877991494, v=0.2617993877991494)
+    $ 24 "Halt"
+    halt
+  end
+end

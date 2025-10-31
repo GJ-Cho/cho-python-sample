@@ -1,0 +1,26 @@
+ Program
+   Init Variables
+   Robot Program
+     MoveJ
+       robot_pose_1
+     write_output_integer_register(24,0)
+     write_output_boolean_register(64,False)
+     Wait read_input_boolean_register(65)
+     read_input_boolean_register(65)
+     'Reading x,y,z,rx,ry,rz valuse'
+     x≔read_input_float_register(24)
+     y≔read_input_float_register(25)
+     z≔read_input_float_register(26)
+     rx≔read_input_float_register(27)
+     ry≔read_input_float_register(28)
+     rz≔read_input_float_register(29)
+     start_pose≔get_actual_tcp_pose()
+     target_pose≔p[x,y,z,rx,ry,rz]
+     movel(target_pose, a=1.0, v=1.0, t=0, r=0)
+     Wait pose_dist(target_pose, get_actual_tcp_pose())<0.01
+     Wait: 0.5
+     write_output_integer_register(24,-1)
+     MoveJ
+       robot_pose_1
+     Halt
+   'capture_hand_eye'
