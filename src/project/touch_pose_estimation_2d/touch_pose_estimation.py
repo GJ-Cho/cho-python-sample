@@ -52,12 +52,12 @@ class _Open3DThread(QThread):
         self._roi_pts = roi_pts
 
     def run(self) -> None:
-        # Full scene point cloud
-        pts = np.nan_to_num(self._xyz).reshape(-1, 3)
-        rgb = self._rgba[:, :, :3].reshape(-1, 3).astype(float) / 255.0
-        pcd = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(pts))
-        pcd.colors = o3d.utility.Vector3dVector(rgb)
-        pcd.remove_non_finite_points(remove_nan=True, remove_infinite=True)
+        # Full scene point cloud — filter NaN points before building PCD
+        xyz_flat = self._xyz.reshape(-1, 3)
+        rgb_flat = self._rgba[:, :, :3].reshape(-1, 3).astype(float) / 255.0
+        valid = ~np.isnan(xyz_flat).any(axis=1)
+        pcd = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(xyz_flat[valid]))
+        pcd.colors = o3d.utility.Vector3dVector(rgb_flat[valid])
 
         # Pose coordinate frame
         frame_mesh = o3d.geometry.TriangleMesh.create_coordinate_frame(size=20)
@@ -282,10 +282,10 @@ class ImageViewer(QLabel):
 class TouchPoseEstimatorApp(QMainWindow):
 
     # ── Colours used for custom buttons ──────────────────────────────────────
-    _C_BLUE   = "rgb(74, 143, 164)"
+    _C_BLUE   = f"rgb{ZividColors.DARK_BLUE}"        # ZividColors.DARK_BLUE
     _C_GREEN  = "rgb(60, 150, 90)"
     _C_PURPLE = "rgb(130, 70, 200)"
-    _C_GRAY   = "rgb(82, 82, 82)"
+    _C_GRAY   = f"rgb{ZividColors.ITEM_BACKGROUND}"  # ZividColors.ITEM_BACKGROUND
 
     def __init__(self, zivid_app: zivid.Application):
         super().__init__()
@@ -562,7 +562,7 @@ class TouchPoseEstimatorApp(QMainWindow):
         try:
             self._camera = self._zivid_app.connect_camera()
             self._btn_capture.setEnabled(True)
-            self._status(f"Connected:  {self._camera.info.model_name}")
+            self._status(f"Connected:  {self._camera.info.model}")
         except Exception as exc:
             self._status(f"Connection failed: {exc}", error=True)
             QMessageBox.critical(self, "Camera Error", str(exc))
@@ -659,7 +659,12 @@ class TouchPoseEstimatorApp(QMainWindow):
             touch_3d = centroid
 
         # Build 4×4 pose: Z aligned with surface normal
+        # In Zivid coordinates Z increases away from camera, so a surface facing
+        # the camera has a normal with z < 0. Flip if SVD resolved the sign ambiguity
+        # the other way so the pose Z-axis consistently points toward the camera.
         z_ax = U[:, 2]
+        if z_ax[2] > 0:
+            z_ax = -z_ax
         x_ax = U[:, 0]
         y_ax = np.cross(z_ax, x_ax)
         y_ax /= np.linalg.norm(y_ax)
