@@ -5,4 +5,8 @@ opencv-python
 scipy
 zivid
 pyyaml
-robodk 
+matplotlib
+pyqt5
+pyqtgraph
+nptyping
+robodk

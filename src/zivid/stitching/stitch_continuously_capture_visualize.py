@@ -35,9 +35,10 @@ def _options() -> argparse.Namespace:
 
     parser.add_argument(
         "--settings-path",
-        required=True,
+        required=False,
+        default=None,
         type=Path,
-        help="Path to the camera settings YML file",
+        help="Path to the camera settings YML file (default: test_settings.yml in same directory)",
     )
 
     return parser.parse_args()
@@ -52,7 +53,6 @@ def show_pointcloud_open3d(xyz, rgb, vis=None, pcd=None):  # type: ignore
         vis = o3d.visualization.Visualizer()
         vis.create_window(window_name="Stitching", width=1920, height=1080)
         vis.add_geometry(pcd)
-        # 배경색을 어두운 회색으로 설정
         render_option = vis.get_render_option()
         render_option.background_color = [0.1, 0.1, 0.1]
         vis.poll_events()
@@ -69,19 +69,15 @@ def show_pointcloud_open3d(xyz, rgb, vis=None, pcd=None):  # type: ignore
 
 
 def _main() -> None:
-    # user_options = _options()
+    user_options = _options()
 
     app = zivid.Application()
 
     # DOCTAG-START-STITCH-ROTATING-OBJECT-CONNECT-AND-LOAD-ROI
     print("Connecting to camera")
     camera = app.connect_camera()
-    
-    settings_file = Path(
-        "C:/Users/GyeongjeCho/OneDrive - Zivid AS/Task/03_Customer/00_Image_Study/20250714_stitching_moving_robot/20250716/settings_03.yml"
-    )
 
-    # settings_file = Path(user_options.settings_path)
+    settings_file = user_options.settings_path if user_options.settings_path else Path(__file__).parent / "test_settings.yml"
     print(f"Loading settings from file: {settings_file}")
     settings = zivid.Settings.load(settings_file)
     # DOCTAG-END-STITCH-ROTATING-OBJECT-CONNECT-AND-LOAD-ROI
@@ -118,7 +114,6 @@ def _main() -> None:
 
         print(f"Captures done: {number_of_captures}")
 
-        # open3d로 실시간 포인트 클라우드 업데이트
         xyz = unorganized_stitched_point_cloud.copy_data("xyz")
         rgb = unorganized_stitched_point_cloud.copy_data("rgba")[:, 0:3]
         vis, pcd = show_pointcloud_open3d(xyz, rgb, vis, pcd)
@@ -128,12 +123,10 @@ def _main() -> None:
         voxel_size=0.75, min_points_per_voxel=2
     )
 
-    # 마지막 결과도 open3d로 갱신
     xyz = unorganized_stitched_point_cloud.copy_data("xyz")
-    rgb = unorganized_stitched_point_cloud.copy_data("rgba")[:, 0:3] 
+    rgb = unorganized_stitched_point_cloud.copy_data("rgba")[:, 0:3]
     vis, pcd = show_pointcloud_open3d(xyz, rgb, vis, pcd)
 
-    # 창을 닫으려면 아래 코드 사용
     if vis is not None:
         vis.run()
         vis.destroy_window()

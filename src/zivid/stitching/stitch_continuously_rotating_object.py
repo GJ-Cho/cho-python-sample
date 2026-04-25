@@ -34,28 +34,25 @@ def _options() -> argparse.Namespace:
 
     parser.add_argument(
         "--settings-path",
-        required=True,
+        required=False,
+        default=None,
         type=Path,
-        help="Path to the camera settings YML file",
+        help="Path to the camera settings YML file (default: test_settings.yml in same directory)",
     )
 
     return parser.parse_args()
 
 
 def _main() -> None:
-    # user_options = _options()
+    user_options = _options()
 
     app = zivid.Application()
 
     # DOCTAG-START-STITCH-ROTATING-OBJECT-CONNECT-AND-LOAD-ROI
     print("Connecting to camera")
     camera = app.connect_camera()
-    
-    settings_file = Path(
-        "C:/Users/GyeongjeCho/OneDrive - Zivid AS/Task/03_Customer/00_Image_Study/20250714_stitching_moving_robot/20250715_test/settings_02.yml"
-    )
-    
-    # settings_file = Path(user_options.settings_path)
+
+    settings_file = user_options.settings_path if user_options.settings_path else Path(__file__).parent / "test_settings.yml"
     print(f"Loading settings from file: {settings_file}")
     settings = zivid.Settings.load(settings_file)
     # DOCTAG-END-STITCH-ROTATING-OBJECT-CONNECT-AND-LOAD-ROI
