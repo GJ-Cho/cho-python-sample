@@ -1,15 +1,81 @@
 # cho-python-sample
 
-Python 예제 코드 저장소입니다.  
-Zivid, Robot, 2D/3D Vision 등 다양한 샘플 코드를 정리합니다.
+Zivid 카메라, 로봇(UR), 2D/3D 비전 관련 Python 샘플 코드 저장소입니다.
 
-## 구조
-- `src/` : 실제 샘플 코드
-- `tests/` : 테스트 코드
-
-## 실행 방법
+## 설치
 
 ```bash
 pip install -r requirements.txt
-python src/your_module.py
 ```
+
+`requirements.txt`의 `./modules` 항목이 `modules/` 패키지를 함께 설치합니다.  
+또는 개발 모드로 직접 설치:
+
+```bash
+cd modules
+pip install -e .
+```
+
+## 폴더 구조
+
+```
+src/
+├── zivid/
+│   ├── convert_zdf/            # ZDF → PLY, PNG, Depth map, Normal map, SNR map 변환
+│   ├── stitching/              # 로컬 포인트 클라우드 레지스트레이션 기반 스티칭
+│   ├── stitching_multi_camera/ # 멀티 카메라 캘리브레이션 및 스티칭
+│   ├── camera/                 # 카메라 캡처 및 라이브 스트리밍
+│   ├── get_camera_intrinsic/   # 카메라 내부 파라미터 추출
+│   └── 4x4_matrix/             # XYZRxRyRz → 4x4 변환 행렬 변환 유틸리티
+└── project/
+    ├── UR_communication_test/  # UR 로봇 RTDE 통신 테스트
+    ├── UR_move_xyzRxRyRz_test/ # UR 로봇 이동 및 핸드아이 캘리브레이션
+    └── pose_estimation/        # 2D/3D 포즈 추정
+
+modules/
+└── zividsamples/               # 공용 유틸리티 모듈 (GUI, 캘리브레이션, 디스플레이 등)
+
+sample/                         # 테스트용 ZDF 샘플 파일
+```
+
+## 주요 샘플 실행
+
+```bash
+# ZDF 파일 일괄 변환 (PLY, PNG, Depth/Normal/SNR map)
+python src/zivid/convert_zdf/convert_zdf_file_dir.py
+
+# 포인트 클라우드 스티칭 (2개 프레임)
+python src/zivid/stitching/stitch_via_local_point_cloud_registration.py
+
+# 회전 물체 연속 스티칭 (카메라 연결 필요)
+python src/zivid/stitching/stitch_continuously_rotating_object.py --settings-path path/to/settings.yml
+
+# 멀티 카메라 캘리브레이션 및 스티칭
+python src/zivid/stitching_multi_camera/multicam_cal.py
+
+# 카메라 내부 파라미터 추출
+python src/zivid/get_camera_intrinsic/get_camera_intrinsics_simple.py
+
+# UR 로봇 RTDE 통신 테스트
+python src/project/UR_communication_test/universal_robots_comm_test.py --ip <ROBOT_IP>
+
+# UR 로봇 이동 + 핸드아이 캘리브레이션
+python src/project/UR_move_xyzRxRyRz_test/universal_robots_move_test.py --eih --ip <ROBOT_IP>
+```
+
+## 주요 의존성
+
+| 패키지 | 용도 |
+|--------|------|
+| `zivid` | Zivid SDK — 3D 카메라 인터페이스 |
+| `open3d` | 포인트 클라우드 처리 및 시각화 |
+| `opencv-python` | 2D 이미지 처리 |
+| `numpy` / `scipy` | 수치 계산, 회전 변환 |
+| `pyqt5` | GUI 컴포넌트 (modules 패키지) |
+| `robodk` | 로봇 시뮬레이션 및 제어 |
+
+## 참고
+
+- ZDF 파일: Zivid 전용 3D 데이터 포맷 (포인트 클라우드 + 2D 이미지 포함)
+- 스티칭 샘플 일부는 실험적 SDK API (`zivid.experimental`) 를 사용하므로 SDK 버전에 따라 변경될 수 있습니다.
+- 로봇 통신 샘플은 RTDE 프로토콜(포트 30004)을 사용하며, 로봇에 해당 `.urp` 프로그램이 로드된 상태여야 합니다.

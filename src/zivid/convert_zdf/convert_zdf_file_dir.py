@@ -44,7 +44,7 @@ def _create_depth_map(frame: zivid.Frame, minz: Optional[int] = 0, maxz: Optiona
     depth_map_color[np.isnan(depth_map)[:, :]] = 0
     depth_map_gray = cv2.cvtColor(depth_map_color, cv2.COLOR_BGR2GRAY)
 
-    return depth_map_color
+    return depth_map_color, depth_map_gray
 
 
 def _create_depth_map_2(frame: zivid.Frame, minz: Optional[int] = 0, maxz: Optional[int] = 3000) -> typing.Any:
@@ -74,9 +74,10 @@ def _create_depth_map_2(frame: zivid.Frame, minz: Optional[int] = 0, maxz: Optio
     depth_map_uint8_double[:][depth_map_uint8>127] = ((depth_map_uint8[:][depth_map_uint8 > 127]-128) / 127) * 255
     depth_map_color_double = cv2.applyColorMap(depth_map_uint8_double, cv2.COLORMAP_HSV)
     depth_map_color_double[np.isnan(depth_map)[:, :]] = 0
+    depth_map_gray_double = cv2.cvtColor(depth_map_color_double, cv2.COLOR_BGR2GRAY)
 
-    # return depth_map_color
-    return depth_map_color_double
+    # return depth_map_color, depth_map_gray
+    return depth_map_color_double, depth_map_gray_double
 
 
 def _create_normal_map(frame: zivid.Frame,) -> typing.Any:
@@ -208,13 +209,17 @@ def _main() -> None:
             image_file = dir + "/" + file.stem + "_2d.png"
             _convert_2_2d(frame, image_file)
             
-            depthmap = _create_depth_map(frame)
+            depthmap, depthmap_gray = _create_depth_map(frame)
             depth_image_file = dir + "/" + file.stem + "_depth.png"
-            cv2.imwrite(depth_image_file , depthmap)
+            cv2.imwrite(depth_image_file, depthmap)
+            depth_gray_image_file = dir + "/" + file.stem + "_depth_gray.png"
+            cv2.imwrite(depth_gray_image_file, depthmap_gray)
 
-            depthmap = _create_depth_map_2(frame)
+            depthmap2, depthmap2_gray = _create_depth_map_2(frame)
             depth_image_file = dir + "/" + file.stem + "_depth2.png"
-            cv2.imwrite(depth_image_file , depthmap)
+            cv2.imwrite(depth_image_file, depthmap2)
+            depth2_gray_image_file = dir + "/" + file.stem + "_depth2_gray.png"
+            cv2.imwrite(depth2_gray_image_file, depthmap2_gray)
 
             normalmap = _create_normal_map(frame)
             normal_image_file = dir + "/" + file.stem + "_normal.png"
