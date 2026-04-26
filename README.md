@@ -28,9 +28,10 @@ src/
 │   ├── get_camera_intrinsic/   # 카메라 내부 파라미터 추출
 │   └── 4x4_matrix/             # XYZRxRyRz → 4x4 변환 행렬 변환 유틸리티
 └── project/
-    ├── UR_communication_test/  # UR 로봇 RTDE 통신 테스트
-    ├── UR_move_xyzRxRyRz_test/ # UR 로봇 이동 및 핸드아이 캘리브레이션
-    └── pose_estimation/        # 2D/3D 포즈 추정
+    ├── UR_communication_test/          # UR 로봇 RTDE 통신 테스트
+    ├── UR_move_xyzRxRyRz_test/         # UR 로봇 이동 및 핸드아이 캘리브레이션
+    ├── pose_estimation/                # 2D/3D 포즈 추정
+    └── touch_pose_estimation_2d/       # 2D 클릭 기반 터치 포즈 추정 GUI
 
 modules/
 └── zividsamples/               # 공용 유틸리티 모듈 (GUI, 캘리브레이션, 디스플레이 등)
@@ -61,7 +62,32 @@ python src/project/UR_communication_test/universal_robots_comm_test.py --ip <ROB
 
 # UR 로봇 이동 + 핸드아이 캘리브레이션
 python src/project/UR_move_xyzRxRyRz_test/universal_robots_move_test.py --eih --ip <ROBOT_IP>
+
+# 2D 클릭 기반 터치 포즈 추정 GUI
+python src/project/touch_pose_estimation_2d/touch_pose_estimation.py
 ```
+
+## 프로젝트 샘플 상세
+
+### touch_pose_estimation_2d — 2D 클릭 기반 터치 포즈 추정
+
+2D 이미지에서 터치 지점을 클릭하고, 주변 포인트 클라우드에 SVD 평면 피팅을 적용해 4×4 포즈 행렬을 추정하는 PyQt5 GUI 애플리케이션입니다.
+
+**주요 기능**
+
+- ZDF 파일 로드 또는 카메라 직접 연결·캡처
+- 구형 반경(mm) 또는 드래그 사각형으로 ROI 선택
+- X-axis 방향 선택: SVD 주축(카메라 +X 부호 정렬) 또는 Camera +X 투영
+- SVD 평면 피팅 → 카메라 좌표계 4×4 포즈 행렬
+- Open3D 3D 뷰어 (포즈 좌표계 + ROI 하이라이트)
+- **Advanced 패널**: Hand-Eye 캘리브레이션(YAML 또는 직접 입력) 기반 로봇 베이스 좌표계 포즈 계산
+  - Eye-to-Hand / Eye-in-Hand 모드 선택
+  - 9가지 6DoF 출력 형식 (4×4, RotVec, Quaternion, Euler 6종)
+- 선택 픽셀 NaN 시 자동 대체 및 경고 출력
+
+자세한 내용은 [`src/project/touch_pose_estimation_2d/README.md`](src/project/touch_pose_estimation_2d/README.md)를 참고하세요.
+
+---
 
 ## 주요 의존성
 
