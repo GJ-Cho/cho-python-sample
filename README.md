@@ -57,11 +57,17 @@ python src/zivid/stitching_multi_camera/multicam_cal.py
 # 카메라 내부 파라미터 추출
 python src/zivid/get_camera_intrinsic/get_camera_intrinsics_simple.py
 
-# UR 로봇 RTDE 통신 테스트
-python src/project/UR_communication_test/universal_robots_comm_test.py --ip <ROBOT_IP>
+# UR 로봇 RTDE 통신 테스트 (IP는 스크립트 내 IP_ROBOT 상수에서 수정)
+python src/project/UR_communication_test/universal_robots_comm_test.py
 
-# UR 로봇 이동 + 핸드아이 캘리브레이션
+# UR 로봇 이동 검증
 python src/project/UR_move_xyzRxRyRz_test/universal_robots_move_test.py --eih --ip <ROBOT_IP>
+
+# UR 로봇 핸드아이 캘리브레이션 데이터셋 생성 + 캘리브레이션
+python src/project/UR_move_xyzRxRyRz_test/universal_robots_perform_hand_eye_calibration.py --eih --ip <ROBOT_IP>
+
+# 픽셀 기반 피킹 포즈 추정 프로토타입 (ZDF 파일 경로 및 파라미터는 스크립트에서 직접 수정)
+python src/project/pose_estimation/pose_estimation_test.py
 
 # 2D 클릭 기반 터치 포즈 추정 GUI
 python src/project/touch_pose_estimation_2d/touch_pose_estimation.py
@@ -86,6 +92,45 @@ python src/project/touch_pose_estimation_2d/touch_pose_estimation.py
 - 선택 픽셀 NaN 시 자동 대체 및 경고 출력
 
 자세한 내용은 [`src/project/touch_pose_estimation_2d/README.md`](src/project/touch_pose_estimation_2d/README.md)를 참고하세요.
+
+---
+
+### UR_communication_test — UR 로봇 RTDE 통신 테스트
+
+UR 로봇과 RTDE(Real-Time Data Exchange, 포트 30004) 통신을 검증하고, 6개 관절 각도를 실시간으로 모니터링·로깅하는 스크립트입니다.
+
+**주요 기능**
+
+- RTDE 200Hz로 6개 관절 실제 각도(`actual_q`) 수신
+- matplotlib 실시간 그래프 (6개 서브플롯, 루프 카운트 표시)
+- `s` 키로 안전 종료, 측정 데이터 → `ur_rtde_joint_log.csv` 저장
+
+자세한 내용은 [`src/project/UR_communication_test/README.md`](src/project/UR_communication_test/README.md)를 참고하세요.
+
+---
+
+### UR_move_xyzRxRyRz_test — UR 로봇 이동 검증 및 핸드아이 캘리브레이션
+
+두 가지 스크립트로 구성됩니다.
+
+- **`universal_robots_move_test.py`**: RTDE double 레지스터(24~29)로 목표 TCP 포즈(XYZRxRyRz)를 전송하고, 이동 전후 실제 TCP 포즈를 비교해 이동 명령을 검증합니다.
+- **`universal_robots_perform_hand_eye_calibration.py`**: 로봇이 미리 정의된 포즈를 순서대로 이동하며 Zivid 카메라로 체커보드를 촬영해 데이터셋을 수집하고, `zivid.calibration.calibrate_eye_in_hand` / `calibrate_eye_to_hand`로 핸드아이 캘리브레이션을 수행합니다. 결과는 `handEyeTransform.yaml`로 저장됩니다.
+
+자세한 내용은 [`src/project/UR_move_xyzRxRyRz_test/README.md`](src/project/UR_move_xyzRxRyRz_test/README.md)를 참고하세요.
+
+---
+
+### pose_estimation — 픽셀 기반 피킹 포즈 추정 프로토타입
+
+ZDF 파일에서 고정 픽셀을 선택하고, 주변 포인트 클라우드에 SVD 평면 피팅을 적용해 피킹 포즈(4×4 행렬)를 추정하는 탐색용 스크립트입니다. GUI 없이 코드에 직접 파라미터를 입력하며, `touch_pose_estimation_2d`의 전신에 해당하는 프로토타입입니다.
+
+**주요 기능**
+
+- 구형 ROI 마스킹 → SVD 평면 피팅 → 4×4 포즈 행렬 생성
+- X축 방향을 이미지 수평 방향으로 보정 (Gram-Schmidt 직교화)
+- Open3D로 포인트 클라우드 + 좌표계를 단계별 시각화
+
+자세한 내용은 [`src/project/pose_estimation/README.md`](src/project/pose_estimation/README.md)를 참고하세요.
 
 ---
 
