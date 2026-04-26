@@ -10,12 +10,12 @@ Available formats:
 
 """
 
-import argparse
 from pathlib import Path
 import typing
 from typing import Optional
 from zivid.experimental.point_cloud_export import export_frame
-from zivid.experimental.point_cloud_export.file_format import PCD, PLY, XYZ, ColorSpace
+from zivid.experimental.point_cloud_export.file_format import PLY, ColorSpace
+from zividsamples.paths import get_sample_data_path
 
 import cv2
 import numpy as np
@@ -194,8 +194,21 @@ def _convert_2_2d(frame: zivid.Frame, file_name: str) -> None:
     # image_2d_in_point_cloud_resolution.save(file_name)
 
 
+def _repo_root() -> Path:
+    """Walk up from this file until the .git directory is found."""
+    for parent in Path(__file__).resolve().parents:
+        if (parent / ".git").is_dir():
+            return parent
+    return Path(__file__).resolve().parents[3]  # fallback: src/zivid/convert_zdf/ → repo root
+
+
 def _main() -> None:
-    sample_dir = Path(__file__).resolve().parent.parent.parent.parent / "sample"
+    sample_dir = _repo_root() / "sample"
+    zivid_data_dir = get_sample_data_path()  # C:/ProgramData/Zivid on Windows
+
+    print(f"Repository sample directory : {sample_dir}")
+    print(f"Zivid ProgramData directory : {zivid_data_dir}")
+    print()
 
     with zivid.Application():
         for file in sample_dir.glob("*.zdf"):
