@@ -12,6 +12,8 @@ No CLI arguments needed. Everything is driven from the GUI:
   5. Click  "Visualize in 3D"  →  Open3D viewer with pose frame + ROI highlight.
 """
 
+import os
+import signal
 import sys
 import datetime
 from pathlib import Path
@@ -20,7 +22,7 @@ from typing import Optional, Tuple
 import numpy as np
 import open3d as o3d
 import zivid
-from PyQt5.QtCore import Qt, QRect, QPoint, QThread, pyqtSignal, QSize
+from PyQt5.QtCore import Qt, QRect, QPoint, QThread, QTimer, pyqtSignal
 from PyQt5.QtGui import QFont, QImage, QPixmap, QPainter, QPen, QColor, QMouseEvent
 from PyQt5.QtWidgets import (
     QMainWindow, QWidget, QLabel, QPushButton, QStatusBar,
@@ -50,22 +52,27 @@ class _Open3DThread(QThread):
         self._rgba    = rgba
         self._pose    = pose
         self._roi_pts = roi_pts
+        self._stop    = False
+
+    def stop(self) -> None:
+        self._stop = True
 
     def run(self) -> None:
-        # Full scene point cloud — filter NaN points before building PCD
         xyz_flat = self._xyz.reshape(-1, 3)
         rgb_flat = self._rgba[:, :, :3].reshape(-1, 3).astype(float) / 255.0
         valid = ~np.isnan(xyz_flat).any(axis=1)
         pcd = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(xyz_flat[valid]))
         pcd.colors = o3d.utility.Vector3dVector(rgb_flat[valid])
 
-        # Pose coordinate frame
-        frame_mesh = o3d.geometry.TriangleMesh.create_coordinate_frame(size=20)
+        # Touch pose coordinate frame
+        frame_mesh = o3d.geometry.TriangleMesh.create_coordinate_frame(size=70)
         frame_mesh.transform(self._pose)
 
-        geometries = [pcd, frame_mesh]
+        # Camera origin coordinate frame at [0, 0, 0] (Zivid camera optical center)
+        camera_frame = o3d.geometry.TriangleMesh.create_coordinate_frame(size=40)
 
-        # ROI highlight
+        geometries = [pcd, frame_mesh, camera_frame]
+
         if self._roi_pts is not None and len(self._roi_pts) > 0:
             roi_pcd = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(self._roi_pts))
             roi_pcd.paint_uniform_color([1.0, 0.35, 0.1])
@@ -77,15 +84,17 @@ class _Open3DThread(QThread):
             vis.add_geometry(g)
 
         opt = vis.get_render_option()
-        opt.point_size        = 1.5
-        opt.background_color  = [0.12, 0.12, 0.12]
-        opt.show_coordinate_frame = True
+        opt.point_size            = 1.5
+        opt.background_color      = [0.12, 0.12, 0.12]
+        opt.show_coordinate_frame = False
 
         vc = vis.get_view_control()
         vc.set_front([0, 0, -1])
         vc.set_up([0, -1, 0])
 
-        vis.run()
+        while not self._stop and vis.poll_events():
+            vis.update_renderer()
+
         vis.destroy_window()
         self.done.emit()
 
@@ -119,11 +128,11 @@ class ImageViewer(QLabel):
 
         self._pixmap_orig: Optional[QPixmap]       = None
         self.mode:         str                      = self.MODE_POINT
-        self._sel_pt:      Optional[Tuple[int,int]] = None   # (u, v) image px
+        self._sel_pt:      Optional[Tuple[int,int]] = None
         self._roi_r:       float                    = 10.0
         self._drag_start:  Optional[QPoint]         = None
-        self._drag_live:   Optional[QRect]          = None   # rect during drag (widget coords)
-        self._sel_rect:    Optional[QRect]          = None   # confirmed (image coords)
+        self._drag_live:   Optional[QRect]          = None
+        self._sel_rect:    Optional[QRect]          = None
 
     # ── Public API ─────────────────────────────────────────────────────────
 
@@ -151,7 +160,6 @@ class ImageViewer(QLabel):
     # ── Coordinate mapping ──────────────────────────────────────────────────
 
     def _pm_rect(self) -> Optional[QRect]:
-        """Bounding rect of the scaled pixmap within the widget."""
         if self._pixmap_orig is None:
             return None
         pm = self._pixmap_orig.scaled(self.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
@@ -160,7 +168,6 @@ class ImageViewer(QLabel):
         return QRect(x, y, pm.width(), pm.height())
 
     def _widget_to_image(self, pt: QPoint) -> Optional[Tuple[int, int]]:
-        """Widget coordinates → original image pixel coordinates."""
         r = self._pm_rect()
         if r is None or r.width() == 0 or r.height() == 0:
             return None
@@ -173,7 +180,6 @@ class ImageViewer(QLabel):
         return (u, v)
 
     def _image_to_pm_local(self, u: int, v: int) -> Tuple[float, float]:
-        """Image pixel coords → pixmap-local coords for painting."""
         r = self._pm_rect()
         sx = r.width()  / self._pixmap_orig.width()
         sy = r.height() / self._pixmap_orig.height()
@@ -190,38 +196,31 @@ class ImageViewer(QLabel):
         painter = QPainter(pm)
         painter.setRenderHint(QPainter.Antialiasing)
 
-        # ── Selected point + ROI circle ──────────────────────────────────
         if self._sel_pt is not None and self.mode == self.MODE_POINT:
             px, py = self._image_to_pm_local(*self._sel_pt)
 
-            # Dashed ROI circle (visual hint — radius is in mm, circle is approximate)
             r_vis = max(12.0, self._roi_r * pm.width() / 900.0)
             painter.setPen(QPen(QColor(255, 200, 40), 1.5, Qt.DashLine))
             painter.setBrush(Qt.NoBrush)
             painter.drawEllipse(QPoint(int(px), int(py)), int(r_vis), int(r_vis))
 
-            # Crosshair
             arm = 16
             painter.setPen(QPen(QColor(50, 255, 110), 2))
             painter.drawLine(int(px - arm), int(py), int(px + arm), int(py))
             painter.drawLine(int(px), int(py - arm), int(px), int(py + arm))
 
-            # Centre dot
             painter.setBrush(QColor(50, 255, 110))
             painter.setPen(Qt.NoPen)
             painter.drawEllipse(QPoint(int(px), int(py)), 5, 5)
 
-        # ── Live drag rectangle ──────────────────────────────────────────
         if self._drag_live is not None and self.mode == self.MODE_RECT:
             dr = self._drag_live
-            # Convert from widget coords to pm-local
             rx = dr.x() - r.x()
             ry = dr.y() - r.y()
             painter.setPen(QPen(QColor(255, 200, 40), 2, Qt.SolidLine))
             painter.setBrush(QColor(255, 200, 40, 45))
             painter.drawRect(rx, ry, dr.width(), dr.height())
 
-        # ── Confirmed rectangle ───────────────────────────────────────────
         if self._sel_rect is not None and self.mode == self.MODE_RECT:
             sr = self._sel_rect
             sx = pm.width()  / self._pixmap_orig.width()
@@ -281,19 +280,17 @@ class ImageViewer(QLabel):
 
 class TouchPoseEstimatorApp(QMainWindow):
 
-    # ── Colours used for custom buttons ──────────────────────────────────────
-    _C_BLUE   = f"rgb{ZividColors.DARK_BLUE}"        # ZividColors.DARK_BLUE
+    _C_BLUE   = f"rgb{ZividColors.DARK_BLUE}"
     _C_GREEN  = "rgb(60, 150, 90)"
     _C_PURPLE = "rgb(130, 70, 200)"
-    _C_GRAY   = f"rgb{ZividColors.ITEM_BACKGROUND}"  # ZividColors.ITEM_BACKGROUND
 
     def __init__(self, zivid_app: zivid.Application):
         super().__init__()
         self._zivid_app   = zivid_app
         self._camera:     Optional[zivid.Camera]     = None
-        self._xyz:        Optional[np.ndarray]       = None   # (H, W, 3) mm
-        self._rgba:       Optional[np.ndarray]       = None   # (H, W, 4) uint8
-        self._pose:       Optional[np.ndarray]       = None   # 4×4
+        self._xyz:        Optional[np.ndarray]       = None
+        self._rgba:       Optional[np.ndarray]       = None
+        self._pose:       Optional[np.ndarray]       = None
         self._o3d_thread: Optional[_Open3DThread]    = None
         self._build_ui()
 
@@ -303,7 +300,7 @@ class TouchPoseEstimatorApp(QMainWindow):
 
     def _build_ui(self) -> None:
         self.setWindowTitle("2D Point-Based Touch Pose Estimator")
-        self.setMinimumSize(1350, 760)
+        self.setMinimumSize(1420, 760)
 
         root = QWidget()
         self.setCentralWidget(root)
@@ -320,7 +317,7 @@ class TouchPoseEstimatorApp(QMainWindow):
         self._viewer.rect_roi_selected.connect(self._on_rect_roi_selected)
         splitter.addWidget(self._viewer)
         splitter.addWidget(self._make_right_panel())
-        splitter.setSizes([960, 360])
+        splitter.setSizes([960, 440])
         root_lay.addWidget(splitter, stretch=1)
 
         self._sb = QStatusBar()
@@ -364,7 +361,7 @@ class TouchPoseEstimatorApp(QMainWindow):
     def _make_right_panel(self) -> QScrollArea:
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
-        scroll.setFixedWidth(360)
+        scroll.setFixedWidth(440)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
 
         inner = QWidget()
@@ -596,7 +593,6 @@ class TouchPoseEstimatorApp(QMainWindow):
         self._spin_v.setMaximum(H - 1)
         self._viewer.load_rgb(self._rgba[:, :, :3])
         self._viewer.set_roi_radius(self._spin_r.value())
-        # reset results
         self._pose = None
         self._txt_pose.clear()
         self._lbl_n.setText("nx: —\nny: —\nnz: —")
@@ -647,25 +643,23 @@ class TouchPoseEstimatorApp(QMainWindow):
 
         self._status(f"SVD plane fitting on {len(pts):,} points …")
 
-        # SVD plane fit
         centroid = pts.mean(axis=0)
         M        = (pts - centroid).T @ (pts - centroid)
         U        = np.linalg.svd(M)[0]   # columns: [dominant, mid, normal]
 
-        # Touch origin: selected pixel in radius mode, centroid in rect mode
         if self._radio_radius.isChecked():
             touch_3d = self._xyz[self._spin_v.value(), self._spin_u.value()]
         else:
             touch_3d = centroid
 
-        # Build 4×4 pose: Z aligned with surface normal
-        # In Zivid coordinates Z increases away from camera, so a surface facing
-        # the camera has a normal with z < 0. Flip if SVD resolved the sign ambiguity
-        # the other way so the pose Z-axis consistently points toward the camera.
+        # Z-axis: surface normal pointing away from camera (+Z in Zivid frame)
         z_ax = U[:, 2]
-        if z_ax[2] > 0:
+        if z_ax[2] < 0:
             z_ax = -z_ax
+        # X-axis: aligned with camera +X (rightward in image)
         x_ax = U[:, 0]
+        if x_ax[0] < 0:
+            x_ax = -x_ax
         y_ax = np.cross(z_ax, x_ax)
         y_ax /= np.linalg.norm(y_ax)
         x_ax  = np.cross(y_ax, z_ax)
@@ -678,7 +672,6 @@ class TouchPoseEstimatorApp(QMainWindow):
         pose[:3, 3] = touch_3d
         self._pose  = pose
 
-        # Update UI
         self._txt_pose.setText(self._fmt_mat(pose))
         nx, ny, nz = z_ax
         self._lbl_n.setText(f"nx: {nx:+.5f}\nny: {ny:+.5f}\nnz: {nz:+.5f}")
@@ -687,6 +680,7 @@ class TouchPoseEstimatorApp(QMainWindow):
             f"Pose estimated  |  {len(pts):,} pts  "
             f"|  touch Z = {touch_3d[2]:.1f} mm"
         )
+        self._print_result(pose, touch_3d, z_ax, len(pts))
 
     def _visualize_3d(self) -> None:
         if self._pose is None or self._xyz is None:
@@ -705,6 +699,50 @@ class TouchPoseEstimatorApp(QMainWindow):
     #  Helpers
     # ─────────────────────────────────────────────────────────────────────────
 
+    def _print_result(
+        self,
+        pose:     np.ndarray,
+        touch_3d: np.ndarray,
+        normal:   np.ndarray,
+        n_pts:    int,
+    ) -> None:
+        W = 67
+        bar = "─" * W
+
+        def row(text: str) -> str:
+            return f"│  {text:<{W - 2}}│"
+
+        timestamp = datetime.datetime.now().strftime("%Y-%m-%d  %H:%M:%S")
+
+        if self._radio_radius.isChecked():
+            u, v = self._spin_u.value(), self._spin_v.value()
+            roi_line = f"Radius   r = {self._spin_r.value():.1f} mm     pixel  u = {u}  v = {v}"
+        else:
+            r = self._viewer._sel_rect
+            roi_line = (
+                f"Rectangle   x = {r.x()}  y = {r.y()}  "
+                f"w = {r.width()}  h = {r.height()}  px"
+            )
+
+        nx, ny, nz = normal
+        tx, ty, tz = touch_3d
+        mat_rows = ["  ".join(f"{v:+10.4f}" for v in pose[i]) for i in range(4)]
+
+        lines = [
+            f"┌{bar}┐",
+            row(f"TOUCH POSE ESTIMATION  ·  {timestamp}"),
+            f"├{bar}┤",
+            row(f"ROI      {roi_line}"),
+            row(f"Touch    X = {tx:+9.3f}   Y = {ty:+9.3f}   Z = {tz:+9.3f}   mm"),
+            row(f"Points   {n_pts:,}"),
+            row(f"Normal   nx = {nx:+.5f}   ny = {ny:+.5f}   nz = {nz:+.5f}"),
+            f"├{bar}┤",
+            row("Pose Matrix 4×4  [R|t]  (mm)"),
+            *[row(f"  {r}") for r in mat_rows],
+            f"└{bar}┘",
+        ]
+        print("\n" + "\n".join(lines) + "\n")
+
     @staticmethod
     def _fmt_mat(m: np.ndarray) -> str:
         return "\n".join(
@@ -717,6 +755,11 @@ class TouchPoseEstimatorApp(QMainWindow):
         self._sb.showMessage(msg)
 
     def closeEvent(self, e) -> None:
+        # Guard: if exec_() does not return on its own, fire forced kill from
+        # inside the event loop after 800 ms.
+        QTimer.singleShot(800, _force_kill)
+        if self._o3d_thread and self._o3d_thread.isRunning():
+            self._o3d_thread.stop()
         if self._camera:
             try:
                 self._camera.disconnect()
@@ -729,10 +772,18 @@ class TouchPoseEstimatorApp(QMainWindow):
 #  Entry point
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _force_kill() -> None:
+    # os.kill(SIGTERM) calls TerminateProcess() via Python's properly-typed
+    # Win32 binding, bypassing DLL_PROCESS_DETACH callbacks that Intel TBB
+    # (used by Open3D) blocks in, causing os._exit() to hang.
+    os.kill(os.getpid(), signal.SIGTERM)
+
+
 def main() -> None:
     with ZividQtApplication() as qt_app:
         win = TouchPoseEstimatorApp(qt_app.zivid_app)
-        sys.exit(qt_app.run(win, "2D Point-Based Touch Pose Estimator"))
+        qt_app.run(win, "2D Point-Based Touch Pose Estimator")
+        _force_kill()
 
 
 if __name__ == "__main__":
