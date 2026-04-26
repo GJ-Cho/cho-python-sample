@@ -23,8 +23,8 @@ from zivid.experimental.point_cloud_export.file_format import PLY
 def _main() -> None:
     zivid.Application()
 
-    # 파일 경로 리스트 생성
-    base_dir = Path("C:/Zivid/python-test/stitching/shoes_02")  
+    # 파일 경로 리스트 생성 — 실행 전 실제 ZDF 파일 경로로 수정 필요
+    base_dir = Path("C:/Zivid/python-test/stitching/shoes_02")
     file_names = [f"0{i}.zdf" for i in range(1, 6)]
     frames = [zivid.Frame(base_dir / fname) for fname in file_names]
 

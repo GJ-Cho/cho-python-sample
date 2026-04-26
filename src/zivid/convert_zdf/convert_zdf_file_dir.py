@@ -69,7 +69,7 @@ def _create_depth_map_2(frame: zivid.Frame, minz: Optional[int] = 0, maxz: Optio
     depth_map_color[np.isnan(depth_map)[:, :]] = 0
     depth_map_gray = cv2.cvtColor(depth_map_color, cv2.COLOR_BGR2GRAY)\
     
-    depth_map_uint8_double = depth_map_uint8
+    depth_map_uint8_double = depth_map_uint8.copy()
     depth_map_uint8_double[:][depth_map_uint8<=127] = (depth_map_uint8[:][depth_map_uint8 <= 127] / 127) * 255
     depth_map_uint8_double[:][depth_map_uint8>127] = ((depth_map_uint8[:][depth_map_uint8 > 127]-128) / 127) * 255
     depth_map_color_double = cv2.applyColorMap(depth_map_uint8_double, cv2.COLORMAP_HSV)
@@ -96,7 +96,7 @@ def _create_normal_map(frame: zivid.Frame,) -> typing.Any:
     normals = point_cloud.copy_data("normals")
     normals_colormap= rgba.copy() # size copy
     normals_colormap[:,:,:3] = 0.5 * (1 - normals) * 255
-    normals_colormap[np.isnan(normals_colormap)[:, :]] = 0
+    normals_colormap[np.isnan(normals).any(axis=2)] = 0
     normals_map_bgr = cv2.cvtColor(normals_colormap, cv2.COLOR_RGBA2BGR) # (RGB > BGR)
 
     return normals_map_bgr
@@ -195,39 +195,29 @@ def _convert_2_2d(frame: zivid.Frame, file_name: str) -> None:
 
 
 def _main() -> None:
-    dir = "C:/Zivid/cho-python-sample/sample"
-    path = Path(dir)
+    sample_dir = Path(__file__).resolve().parent.parent.parent.parent / "sample"
 
     with zivid.Application():
-        for file in path.glob("*.zdf"):
+        for file in sample_dir.glob("*.zdf"):
             print(f"Reading point cloud from file: {file.stem}")
             frame = zivid.Frame(file)
 
-            ply_image_file = dir + "/" + file.stem + ".ply"
-            _convert_2_ply(frame, ply_image_file)
+            _convert_2_ply(frame, sample_dir / (file.stem + ".ply"))
+            _convert_2_2d(frame, str(sample_dir / (file.stem + "_2d.png")))
 
-            image_file = dir + "/" + file.stem + "_2d.png"
-            _convert_2_2d(frame, image_file)
-            
             depthmap, depthmap_gray = _create_depth_map(frame)
-            depth_image_file = dir + "/" + file.stem + "_depth.png"
-            cv2.imwrite(depth_image_file, depthmap)
-            depth_gray_image_file = dir + "/" + file.stem + "_depth_gray.png"
-            cv2.imwrite(depth_gray_image_file, depthmap_gray)
+            cv2.imwrite(str(sample_dir / (file.stem + "_depth.png")), depthmap)
+            cv2.imwrite(str(sample_dir / (file.stem + "_depth_gray.png")), depthmap_gray)
 
             depthmap2, depthmap2_gray = _create_depth_map_2(frame)
-            depth_image_file = dir + "/" + file.stem + "_depth2.png"
-            cv2.imwrite(depth_image_file, depthmap2)
-            depth2_gray_image_file = dir + "/" + file.stem + "_depth2_gray.png"
-            cv2.imwrite(depth2_gray_image_file, depthmap2_gray)
+            cv2.imwrite(str(sample_dir / (file.stem + "_depth2.png")), depthmap2)
+            cv2.imwrite(str(sample_dir / (file.stem + "_depth2_gray.png")), depthmap2_gray)
 
             normalmap = _create_normal_map(frame)
-            normal_image_file = dir + "/" + file.stem + "_normal.png"
-            cv2.imwrite(normal_image_file , normalmap)
+            cv2.imwrite(str(sample_dir / (file.stem + "_normal.png")), normalmap)
 
             snr_map = _create_snr_map(frame)
-            snr_image_file = dir + "/" + file.stem + "_snr.png"
-            cv2.imwrite(snr_image_file , snr_map)
+            cv2.imwrite(str(sample_dir / (file.stem + "_snr.png")), snr_map)
 
 if __name__ == "__main__":
     _main()

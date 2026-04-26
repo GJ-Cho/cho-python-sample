@@ -8,7 +8,6 @@ The entire sample consist of two additional files:
 
 """
 
-import zivid # :) 
 import argparse
 import datetime
 import time

@@ -20,7 +20,6 @@ from zivid.experimental.toolbox.point_cloud_registration import (
     LocalPointCloudRegistrationParameters,
     local_point_cloud_registration,
 )
-from zividsamples.display import display_pointcloud
 import open3d as o3d
 
 

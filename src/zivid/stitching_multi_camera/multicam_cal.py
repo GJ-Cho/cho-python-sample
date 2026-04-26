@@ -1,11 +1,9 @@
-import os
-import cv2
 import numpy as np
 import open3d as o3d
 import zivid
 from pathlib import Path
 
-location_dir = Path.cwd()
+location_dir = Path(__file__).resolve().parent
 
 def main() -> None:
     with zivid.Application():
@@ -14,7 +12,7 @@ def main() -> None:
         calibration_inputs = []
         idata = 1
         while True:
-            frame_file_path = location_dir / "zivid" / "stitching_multi_camera" / f"img{idata:02d}.zdf"
+            frame_file_path = location_dir / f"img{idata:02d}.zdf"
             print("Loading ZDF for Multi camera calibration : ", frame_file_path)
             if frame_file_path.is_file():
 
@@ -48,7 +46,7 @@ def main() -> None:
         
         # Loading zdf for stitching and Stitching!
         for i in range(len(transforms)):
-            frame_file_path = location_dir / "zivid" / "stitching_multi_camera" / f"img_test_{idata:02d}.zdf"
+            frame_file_path = location_dir / f"img_test_{idata:02d}.zdf"
             print("Loading ZDF for Stitching : ", frame_file_path)
             if frame_file_path.is_file():
                 print(f"Stitching point cloud from img_test_{idata:02d}.zdf")

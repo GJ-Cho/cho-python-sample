@@ -42,19 +42,19 @@ sample/                         # 테스트용 ZDF 샘플 파일
 ## 주요 샘플 실행
 
 ```bash
-# ZDF 파일 일괄 변환 (PLY, PNG, Depth/Normal/SNR map)
+# ZDF 파일 일괄 변환 (PLY, PNG, Depth/Normal/SNR map) — sample/ 폴더의 ZDF를 자동 탐색
 python src/zivid/convert_zdf/convert_zdf_file_dir.py
 
-# 포인트 클라우드 스티칭 (2개 프레임)
+# 포인트 클라우드 스티칭 (2개 프레임) — C:/ProgramData/Zivid/StitchingPointClouds/BlueObject/ 필요
 python src/zivid/stitching/stitch_via_local_point_cloud_registration.py
 
 # 회전 물체 연속 스티칭 (카메라 연결 필요)
 python src/zivid/stitching/stitch_continuously_rotating_object.py --settings-path path/to/settings.yml
 
-# 멀티 카메라 캘리브레이션 및 스티칭
+# 멀티 카메라 캘리브레이션 및 스티칭 — imgXX.zdf, img_test_XX.zdf를 같은 폴더에 배치 후 실행
 python src/zivid/stitching_multi_camera/multicam_cal.py
 
-# 카메라 내부 파라미터 추출
+# 카메라 내부 파라미터 추출 — sample/sample_MR130.zdf 필요
 python src/zivid/get_camera_intrinsic/get_camera_intrinsics_simple.py
 
 # UR 로봇 RTDE 통신 테스트 (IP는 스크립트 내 IP_ROBOT 상수에서 수정)
@@ -148,5 +148,8 @@ ZDF 파일에서 고정 픽셀을 선택하고, 주변 포인트 클라우드에
 ## 참고
 
 - ZDF 파일: Zivid 전용 3D 데이터 포맷 (포인트 클라우드 + 2D 이미지 포함)
+- `convert_zdf_file_dir.py`는 `sample/` 폴더의 모든 ZDF를 자동으로 처리합니다.
+- `get_camera_intrinsics_simple.py`는 `sample/sample_MR130.zdf` 파일이 있어야 실행됩니다.
+- `multicam_cal.py`는 ZDF 파일이 `src/zivid/stitching_multi_camera/` 폴더에 있어야 합니다 (`img01.zdf`, `img_test_01.zdf` …).
 - 스티칭 샘플 일부는 실험적 SDK API (`zivid.experimental`) 를 사용하므로 SDK 버전에 따라 변경될 수 있습니다.
 - 로봇 통신 샘플은 RTDE 프로토콜(포트 30004)을 사용하며, 로봇에 해당 `.urp` 프로그램이 로드된 상태여야 합니다.
