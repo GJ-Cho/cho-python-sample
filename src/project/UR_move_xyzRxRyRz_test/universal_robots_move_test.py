@@ -1,218 +1,189 @@
 """
-Script to generate a dataset and perform hand-eye calibration using a Universal Robot UR5e robot.
-The script communicates with the robot through Real-Time Data Exchange (RTDE) interface.
-More information about RTDE:
-https://www.universal-robots.com/how-tos-and-faqs/how-to/ur-how-tos/real-time-data-exchange-rtde-guide-22229/
+Script to verify UR robot movement via RTDE (Real-Time Data Exchange).
 
-The entire sample consist of two additional files:
-    - universal_robots_hand_eye_script.urp: Robot program script that moves between different poses.
-    - robot_communication_file.xml: communication set-up file.
+Reads the current TCP pose, calculates a target pose offset by +10 mm in X, Y, Z,
+sends the target to the robot via RTDE registers, and prints before/after poses
+along with actual vs. expected movement error.
 
-Running the sample requires that you have universal_robots_hand_eye_script.urp on your UR5e robot,
-and robot_communication_file.xml in the same repo as this sample. Each robot pose
-must be modified to your scene. This is done in universal_robots_hand_eye_script.urp on the robot.
+Requirements:
+    - universal_robots_communication_file.xml in the same directory as this script
+    - ur_comm_test.urp loaded and running on the UR robot teach pendant
 
-Further explanation of this sample is found in our knowledge base:
-https://support.zivid.com/latest/academy/applications/hand-eye/ur5-robot-%2B-python-generate-dataset-and-perform-hand-eye-calibration.html
-
+RTDE guide:
+    https://www.universal-robots.com/how-tos-and-faqs/how-to/ur-how-tos/real-time-data-exchange-rtde-guide-22229/
 """
 
 import argparse
-import datetime
 import time
 from pathlib import Path
-from typing import List, Tuple
+from typing import Tuple
 
-import cv2
 import numpy as np
-import zivid
 from rtde import rtde, rtde_config
-from scipy.spatial.transform import Rotation
+
+_MOVE_OFFSET_MM = 10.0
 
 
 def _options() -> argparse.Namespace:
-    """Function for taking in arguments from user.
-
-    Returns:
-        Arguments from user
-
-    """
     parser = argparse.ArgumentParser(description=__doc__)
-    mode_group = parser.add_mutually_exclusive_group(required=True)
-    mode_group.add_argument("--eih", "--eye-in-hand", action="store_true", help="eye-in-hand calibration")
-    mode_group.add_argument("--eth", "--eye-to-hand", action="store_true", help="eye-to-hand calibration")
-    parser.add_argument("--ip", required=True, help="IP address to robot")
-
+    parser.add_argument("--ip", required=True, help="IP address of the UR robot")
     return parser.parse_args()
 
 
-def _write_robot_state(
-    con: rtde.RTDE,
-    input_data: rtde.serialize.DataObject,
-    finish_capture: bool = False,
-    camera_ready: bool = False,
-    x: float = 0.4801234567,
-    y: float = -0.50001,
-    z: float = 0.4401111111,
-    rx: float = 3,
-    ry: float = 0.0666,
-    rz: float = -0.234,
-) -> None:
-    """Write to robot I/O registers.
+def _connect(host: str) -> Tuple[rtde.RTDE, rtde.serialize.DataObject]:
+    """Connect to UR robot via RTDE and configure input/output registers.
 
     Args:
-        con: Connection between computer and robot
-        input_data: Input package containing the specific input data registers
-        finish_capture: Boolean value to robot_state that q_r scene capture is finished
-        camera_ready: Boolean value to robot_state that camera is ready to capture images
-
-    """
-    input_data.input_bit_register_64 = int(finish_capture)
-    input_data.input_bit_register_65 = int(camera_ready)
-    input_data.input_double_register_24 = float(x)
-    input_data.input_double_register_25 = float(y)
-    input_data.input_double_register_26 = float(z)
-    input_data.input_double_register_27 = float(rx)
-    input_data.input_double_register_28 = float(ry)
-    input_data.input_double_register_29 = float(rz)
-
-    con.send(input_data)
-
-
-def _initialize_robot_sync(host: str) -> Tuple[rtde.RTDE, rtde.serialize.DataObject]:
-    """Set up communication with UR robot.
-
-    Args:
-        host: IP address
+        host: Robot IP address
 
     Returns:
-        con: Connection to robot
-        robot_input_data: Package containing the specific input data registers
+        con: Active RTDE connection
+        robot_input: Input register data object
 
     Raises:
-        RuntimeError: If protocol do not match
-        RuntimeError: If script is unable to configure output
-        RuntimeError: If synchronization is not possible
+        RuntimeError: If protocol negotiation, output setup, or synchronization fails
 
     """
-    conf = rtde_config.ConfigFile(Path(Path.cwd() / "universal_robots_communication_file.xml"))
+    conf = rtde_config.ConfigFile(Path(__file__).parent / "universal_robots_communication_file.xml")
     output_names, output_types = conf.get_recipe("out")
     input_names, input_types = conf.get_recipe("in")
 
-    # port 30004 is reserved for rtde
     con = rtde.RTDE(host, 30004)
     con.connect()
 
-    # To ensure that the application is compatible with further versions of UR controller
     if not con.negotiate_protocol_version():
-        raise RuntimeError("Protocol do not match")
-
+        raise RuntimeError("RTDE protocol version mismatch")
     if not con.send_output_setup(output_names, output_types, frequency=200):
-        raise RuntimeError("Unable to configure output")
+        raise RuntimeError("Unable to configure RTDE output")
 
-    robot_input_data = con.send_input_setup(input_names, input_types)
+    robot_input = con.send_input_setup(input_names, input_types)
 
     if not con.send_start():
-        raise RuntimeError("Unable to start synchronization")
+        raise RuntimeError("Unable to start RTDE synchronization")
 
-    print("Communication initialization completed. \n")
-
-    return con, robot_input_data
-
-
-def _read_robot_state(con: rtde.RTDE) -> rtde.serialize:
-    """Receive robot output recipe.
-
-    Args:
-        con: Connection between computer and robot
-
-    Returns:
-        robot_state: Robot state
-
-    """
-    robot_state = con.receive()
-
-    assert robot_state is not None, "Not able to receive robot_state"
-
-    return robot_state
+    print("RTDE connection established.\n")
+    return con, robot_input
 
 
-def _image_count(robot_state) -> int:
-    """Read robot output register 24.
+def _read_state(con: rtde.RTDE) -> rtde.serialize:
+    """Receive current robot state from RTDE output registers.
 
     Args:
-        robot_state: Robot state
+        con: Active RTDE connection
 
     Returns:
-        Number of captured images
+        Current robot state
 
     """
-    return robot_state.output_int_register_24
+    state = con.receive()
+    assert state is not None, "Failed to receive robot state"
+    return state
 
 
-def _ready_for_capture(robot_state) -> bool:
-    """Read robot output register 64.
+def _move_status(state) -> int:
+    """Read move completion status from output_int_register_24. Returns -1 when complete."""
+    return state.output_int_register_24
+
+
+def _send_command(
+    con: rtde.RTDE,
+    robot_input: rtde.serialize.DataObject,
+    target_pose_m: list,
+    pc_ready: bool = False,
+    move_confirmed: bool = False,
+) -> None:
+    """Write target pose and control signals to RTDE input registers.
 
     Args:
-        robot_state: Robot state
-
-    Returns:
-        Boolean value that states if camera is ready to capture
+        con: Active RTDE connection
+        robot_input: Input register data object
+        target_pose_m: Target TCP pose [x, y, z, rx, ry, rz] in meters/radians
+        pc_ready: Signal to robot that PC has set the target pose (input_bit_register_65)
+        move_confirmed: Signal to robot that PC confirmed move completion (input_bit_register_64)
 
     """
-    return robot_state.output_bit_register_64
+    robot_input.input_bit_register_64 = int(move_confirmed)
+    robot_input.input_bit_register_65 = int(pc_ready)
+    robot_input.input_double_register_24 = float(target_pose_m[0])
+    robot_input.input_double_register_25 = float(target_pose_m[1])
+    robot_input.input_double_register_26 = float(target_pose_m[2])
+    robot_input.input_double_register_27 = float(target_pose_m[3])
+    robot_input.input_double_register_28 = float(target_pose_m[4])
+    robot_input.input_double_register_29 = float(target_pose_m[5])
+    con.send(robot_input)
 
 
-def _comm_test(app: zivid.Application, con: rtde.RTDE, input_data: rtde.serialize.DataObject) -> Path:
-    """Generate dataset based on predefined robot poses.
+def _to_mm(pose_m: np.ndarray) -> np.ndarray:
+    """Convert RTDE TCP pose translation from meters to millimeters."""
+    result = pose_m.copy()
+    result[:3] *= 1000.0
+    return result
+
+
+def _print_pose(label: str, pose_mm: np.ndarray) -> None:
+    x, y, z, rx, ry, rz = pose_mm
+    print(label)
+    print(f"  X={x:.3f} mm   Y={y:.3f} mm   Z={z:.3f} mm")
+    print(f"  Rx={rx:.6f} rad   Ry={ry:.6f} rad   Rz={rz:.6f} rad\n")
+
+
+def _run(con: rtde.RTDE, robot_input: rtde.serialize.DataObject) -> None:
+    """Read current pose, move robot by +10 mm in X/Y/Z, verify result.
 
     Args:
-        app: Zivid application instance
-        con: Connection between computer and robot
-        input_data: Input package containing the specific input data registers
-
-    Returns:
-        ?? : Save_dir to where dataset is saved
+        con: Active RTDE connection
+        robot_input: Input register data object
 
     """
+    offset_m = _MOVE_OFFSET_MM / 1000.0
 
-    # Signal robot that camera is ready
-    ready_to_capture = True
-    _write_robot_state(con, input_data, finish_capture=False, camera_ready=ready_to_capture)
+    # Read and print current pose
+    current_pose = np.array(_read_state(con).actual_TCP_pose, dtype=float)
+    _print_pose("Current TCP pose:", _to_mm(current_pose))
 
-    robot_state = _read_robot_state(con)
-    pose = robot_state.actual_TCP_pose
+    # Calculate target: current + [+10 mm, +10 mm, +10 mm, 0, 0, 0]
+    target_pose = current_pose.copy()
+    target_pose[0] += offset_m
+    target_pose[1] += offset_m
+    target_pose[2] += offset_m
+    _print_pose(f"Target TCP pose (current + {_MOVE_OFFSET_MM:.0f} mm in X, Y, Z):", _to_mm(target_pose))
 
-    print("start robot pose: ",pose)
+    # Send target pose and signal robot to start moving
+    _send_command(con, robot_input, target_pose.tolist(), pc_ready=True)
 
-    print("Please check Robot variable x,y,z,rx,ry,rz values!")
+    # Wait for move to complete (move_status == -1)
+    print("Waiting for robot movement to complete...")
+    while True:
+        state = _read_state(con)
+        if _move_status(state) == -1:
+            break
 
-    while _image_count(robot_state) != -1:
-            robot_state = _read_robot_state(con)
+    # Read and print final pose
+    final_pose = np.array(state.actual_TCP_pose, dtype=float)
+    _print_pose("Final TCP pose:", _to_mm(final_pose))
 
+    # Movement verification: expected vs actual delta
+    expected_delta = np.array([_MOVE_OFFSET_MM, _MOVE_OFFSET_MM, _MOVE_OFFSET_MM])
+    actual_delta = (_to_mm(final_pose) - _to_mm(current_pose))[:3]
+    error = actual_delta - expected_delta
+    print("Movement verification:")
+    print(f"  Expected delta XYZ : {expected_delta} mm")
+    print(f"  Actual delta   XYZ : {actual_delta.round(3)} mm")
+    print(f"  Error          XYZ : {error.round(3)} mm\n")
 
-    robot_state = _read_robot_state(con)
-    pose = robot_state.actual_TCP_pose
-
-    print("moved robot pose: ",pose)
-
-    _write_robot_state(con, input_data, finish_capture=False, camera_ready=False)
-    time.sleep(1.0)
+    # Signal move_confirmed then disconnect
+    _send_command(con, robot_input, target_pose.tolist(), move_confirmed=True)
+    time.sleep(0.5)
+    _send_command(con, robot_input, target_pose.tolist(), move_confirmed=False)
+    time.sleep(0.5)
     con.send_pause()
     con.disconnect()
-
-    return
+    print("RTDE connection closed.")
 
 
 def _main() -> None:
-    app = zivid.Application()
-    user_options = _options()
-
-    robot_ip_address = user_options.ip
-    con, input_data = _initialize_robot_sync(robot_ip_address)
-    con.send_start()
-
-    _comm_test(app, con, input_data)
+    con, robot_input = _connect(_options().ip)
+    _run(con, robot_input)
 
 
 if __name__ == "__main__":
