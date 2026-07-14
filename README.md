@@ -28,10 +28,11 @@ src/
 │   ├── get_camera_intrinsic/   # 카메라 내부 파라미터 추출
 │   └── 4x4_matrix/             # XYZRxRyRz → 4x4 변환 행렬 변환 유틸리티
 └── project/
-    ├── UR_communication_test/          # UR 로봇 RTDE 통신 테스트
-    ├── UR_move_xyzRxRyRz_test/         # UR 로봇 이동 및 핸드아이 캘리브레이션
-    ├── pose_estimation/                # 2D/3D 포즈 추정
-    └── touch_pose_estimation_2d/       # 2D 클릭 기반 터치 포즈 추정 GUI
+    ├── UR_communication_test/                  # UR 로봇 RTDE 통신 테스트
+    ├── UR_move_xyzRxRyRz_test/               # UR 로봇 TCP 이동 검증
+    ├── pose_estimation/                       # 2D/3D 포즈 추정
+    ├── touch_pose_estimation_2d/             # 2D 클릭 기반 터치 포즈 추정 GUI
+    └── touch_pose_estimation_cal_board_marker/ # 캘리브레이션 보드 마커 기반 터치 포즈 추정 GUI
 
 modules/
 └── zividsamples/               # 공용 유틸리티 모듈 (GUI, 캘리브레이션, 디스플레이 등)
@@ -60,11 +61,8 @@ python src/zivid/get_camera_intrinsic/get_camera_intrinsics_simple.py
 # UR 로봇 RTDE 통신 테스트 (IP는 스크립트 내 IP_ROBOT 상수에서 수정)
 python src/project/UR_communication_test/universal_robots_comm_test.py
 
-# UR 로봇 이동 검증
-python src/project/UR_move_xyzRxRyRz_test/universal_robots_move_test.py --eih --ip <ROBOT_IP>
-
-# UR 로봇 핸드아이 캘리브레이션 데이터셋 생성 + 캘리브레이션
-python src/project/UR_move_xyzRxRyRz_test/universal_robots_perform_hand_eye_calibration.py --eih --ip <ROBOT_IP>
+# UR 로봇 TCP 이동 검증 (+10mm XYZ)
+python src/project/UR_move_xyzRxRyRz_test/universal_robots_move_test.py --ip <ROBOT_IP>
 
 # 픽셀 기반 피킹 포즈 추정 프로토타입 (ZDF 파일 경로 및 파라미터는 스크립트에서 직접 수정)
 python src/project/pose_estimation/pose_estimation_test.py
@@ -109,12 +107,9 @@ UR 로봇과 RTDE(Real-Time Data Exchange, 포트 30004) 통신을 검증하고,
 
 ---
 
-### UR_move_xyzRxRyRz_test — UR 로봇 이동 검증 및 핸드아이 캘리브레이션
+### UR_move_xyzRxRyRz_test — UR 로봇 TCP 이동 검증
 
-두 가지 스크립트로 구성됩니다.
-
-- **`universal_robots_move_test.py`**: RTDE double 레지스터(24~29)로 목표 TCP 포즈(XYZRxRyRz)를 전송하고, 이동 전후 실제 TCP 포즈를 비교해 이동 명령을 검증합니다.
-- **`universal_robots_perform_hand_eye_calibration.py`**: 로봇이 미리 정의된 포즈를 순서대로 이동하며 Zivid 카메라로 체커보드를 촬영해 데이터셋을 수집하고, `zivid.calibration.calibrate_eye_in_hand` / `calibrate_eye_to_hand`로 핸드아이 캘리브레이션을 수행합니다. 결과는 `handEyeTransform.yaml`로 저장됩니다.
+RTDE double 레지스터(24~29)로 목표 TCP 포즈(XYZRxRyRz)를 전송하고, 현재 포즈에서 X/Y/Z 각 +10 mm 이동 후 실제 이동량을 비교해 검증합니다.
 
 자세한 내용은 [`src/project/UR_move_xyzRxRyRz_test/README.md`](src/project/UR_move_xyzRxRyRz_test/README.md)를 참고하세요.
 
@@ -131,6 +126,22 @@ ZDF 파일에서 고정 픽셀을 선택하고, 주변 포인트 클라우드에
 - Open3D로 포인트 클라우드 + 좌표계를 단계별 시각화
 
 자세한 내용은 [`src/project/pose_estimation/README.md`](src/project/pose_estimation/README.md)를 참고하세요.
+
+---
+
+### touch_pose_estimation_cal_board_marker — 캘리브레이션 보드 / ArUco 마커 기반 터치 포즈 추정
+
+ZDF 파일 또는 라이브 캡처에서 Zivid 캘리브레이션 보드 또는 ArUco 마커를 검출하고, 핸드아이 캘리브레이션 행렬을 적용해 로봇 베이스 좌표계 포즈를 계산하는 PyQt5 GUI 애플리케이션입니다.
+
+**주요 기능**
+
+- 검출 대상 전환: Calibration Board(체커보드) 또는 ArUco Marker
+- 카메라 설정 전환: Eye-to-Hand / Eye-in-Hand
+- ArUco 마커 복수 검출 시 ID가 가장 작은 마커 우선 사용
+- 9가지 회전 출력 형식 (4×4, RotVec, Quaternion, Euler 6종)
+- Open3D 3D 뷰어 (검출 포즈 좌표계 표시)
+
+자세한 내용은 [`src/project/touch_pose_estimation_cal_board_marker/README.md`](src/project/touch_pose_estimation_cal_board_marker/README.md)를 참고하세요.
 
 ---
 

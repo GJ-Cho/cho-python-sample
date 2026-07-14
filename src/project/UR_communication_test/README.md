@@ -50,7 +50,7 @@ ur_rtde_joint_log.csv 저장
 
 | 항목 | 내용 |
 |------|------|
-| 로봇 프로그램 | `universal_robots_hand_eye_script.urp`을 UR 티치 펜던트에 로드 |
+| 로봇 프로그램 | `ur_comm_test.urp`을 UR 티치 펜던트에 로드 |
 | 통신 설정 파일 | `universal_robots_communication_file.xml`이 스크립트와 같은 디렉터리에 있어야 함 |
 | 네트워크 | PC와 로봇이 같은 네트워크에 연결되어 있어야 함 |
 
