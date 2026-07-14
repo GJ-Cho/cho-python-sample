@@ -16,13 +16,12 @@ def main() -> None:
             print("Loading ZDF for Multi camera calibration : ", frame_file_path)
             if frame_file_path.is_file():
 
-                print(f"Detect feature points from img{idata:02d}.zdf")
+                print(f"Detect calibration board from img{idata:02d}.zdf")
                 frame = zivid.Frame(frame_file_path)
-                point_cloud = frame.point_cloud()
-                detection_result = zivid.calibration.detect_feature_points(point_cloud)
+                detection_result = zivid.calibration.detect_calibration_board(frame)
 
                 if not detection_result.valid():
-                    raise RuntimeError(f"Failed to detect feature points from frame {frame_file_path}")
+                    raise RuntimeError(f"Failed to detect calibration board from frame {frame_file_path}")
 
                 calibration_inputs.append(detection_result)
 
