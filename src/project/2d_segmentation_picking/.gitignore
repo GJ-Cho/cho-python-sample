@@ -1,2 +1,5 @@
 # 생성 산출물 (inspect_zdf 등 실행 시 재생성 가능) — 리포에 넣지 않음
 data/output/
+
+# build_bin_frame가 자동 생성하는 bin frame 캐시 (bin_roi.json 티칭 결과로부터 재계산)
+config/bin_frame.json

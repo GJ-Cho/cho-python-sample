@@ -57,7 +57,11 @@ def load_npz(path: str | Path) -> "SceneData":
 
 
 def load(path: str | Path) -> "SceneData":
-    """확장자로 로더를 분기한다 (.zdf → Zivid, .npz → numpy)."""
+    """확장자로 로더를 분기한다 (.zdf → Zivid, .npz → numpy).
+
+    주의: .zdf는 호출 측에서 zivid.Application()이 활성화된 상태여야 한다.
+    Application 관리까지 자동으로 처리하려면 load_any()를 사용할 것.
+    """
     path = Path(path)
     suffix = path.suffix.lower()
     if suffix == ".zdf":
@@ -65,3 +69,16 @@ def load(path: str | Path) -> "SceneData":
     if suffix == ".npz":
         return load_npz(path)
     raise ValueError(f"지원하지 않는 확장자: {suffix} (지원: .zdf, .npz)")
+
+
+def load_any(path: str | Path) -> "SceneData":
+    """load()와 같되, .zdf일 때 zivid.Application()을 자동으로 열고 닫는다.
+
+    한 스크립트에서 장면을 한 번만 로드하는 배치 용도에 적합하다.
+    """
+    path = Path(path)
+    if path.suffix.lower() == ".zdf":
+        import zivid
+        with zivid.Application():
+            return load_zdf(path)
+    return load(path)

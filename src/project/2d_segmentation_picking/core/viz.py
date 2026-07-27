@@ -9,6 +9,44 @@ from __future__ import annotations
 
 import numpy as np
 
+def setup_korean_font() -> str | None:
+    """matplotlib GUI/그림의 한글이 깨지지 않도록 한글 폰트를 설정한다.
+
+    OS별 흔한 한글 폰트 파일을 찾아 등록하고 rcParams에 적용한다.
+    성공 시 폰트명, 실패 시 None(영문만 정상 표시)을 반환한다.
+    """
+    import os
+
+    import matplotlib
+    import matplotlib.font_manager as fm
+
+    candidates = [
+        r"C:\Windows\Fonts\malgun.ttf",   # Windows 맑은 고딕
+        r"C:\Windows\Fonts\gulim.ttc",    # Windows 굴림
+        r"C:\Windows\Fonts\batang.ttc",   # Windows 바탕
+        "/usr/share/fonts/truetype/nanum/NanumGothic.ttf",  # Linux 나눔고딕
+        "/System/Library/Fonts/AppleSDGothicNeo.ttc",        # macOS
+    ]
+    for path in candidates:
+        if os.path.exists(path):
+            try:
+                fm.fontManager.addfont(path)
+                name = fm.FontProperties(fname=path).get_name()
+                matplotlib.rcParams["font.family"] = name
+                matplotlib.rcParams["axes.unicode_minus"] = False  # 음수 기호 깨짐 방지
+                return name
+            except Exception:
+                continue
+    # 파일 경로 실패 시 등록된 폰트 이름으로 재시도
+    available = {f.name for f in fm.fontManager.ttflist}
+    for name in ["Malgun Gothic", "AppleGothic", "NanumGothic", "Noto Sans CJK KR"]:
+        if name in available:
+            matplotlib.rcParams["font.family"] = name
+            matplotlib.rcParams["axes.unicode_minus"] = False
+            return name
+    return None
+
+
 # 마스크/후보 구분용 기본 색상 (BGR, cv2 기준)
 _PALETTE_BGR = [
     (0, 0, 255), (0, 255, 0), (255, 0, 0), (0, 255, 255),

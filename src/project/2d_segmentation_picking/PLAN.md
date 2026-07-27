@@ -119,6 +119,12 @@ valid = bin_roi_2d AND 상대밴드 AND 절대경계 AND (snr > snr_min)
 
 SAM2의 프롬프트 그리드는 이 마스크 내부에만 배치한다. 프롬프트 수가 크게 줄어 속도도 개선된다.
 
+> **Phase 1 실측 교정 (2026-07-27, image_test.zdf 기준)**
+> 1. **bin_roi_2d는 별도 티칭하지 않고 림 4꼭짓점에서 파생**한다. `roi.bin_interior_mask`가 림 안쪽(+ `shrink_mm`로 사면 벽 제외)을 반환. 빈 바깥 표면이 내용물보다 카메라에 가까워(높이 큼) 최상층으로 오검출되므로 **반드시 빈 내부로 한정**해야 한다.
+> 2. **절대 경계(`floor_margin < h < bin_depth`)는 기본 사용하지 않는다.** `bin_depth`가 추정값이면 p_floor가 부정확해 절대 게이팅이 전부를 잘라낸다. 실측 전까지는 **상대 밴드(h > p99 − band, ROI 내부에서 계산)** 만으로 최상층을 잡는다. 상대 밴드는 절대 스케일에 무관해 강건하다.
+> 3. 빈 사면 안쪽 벽이 림 높이라 최상층에 걸리면 `bin_interior_mask(shrink_mm≈50)`로 벽을 대부분 제외한다. 남는 벽 잔류는 **후속 SAM2/평면성 평가에서 걸러낸다**(별도 색/기하 처리 안 함).
+> 4. 채택 파라미터: `rim_band_mm=20`, `interior_shrink_mm=50`, `top_band_mm=50`, 절대 게이팅 off. 결과: 최상층이 더미 최상단 파우치/튜브에 안착.
+
 ---
 
 ## 4. Bin Frame — 카메라 기울기 불변성
@@ -272,7 +278,7 @@ Python **3.12 확정** (2026-07-27). 당초 3.11로 계획했으나, 개발 머�
 | Phase | 내용 | 검증 기준 | 상태 |
 |---|---|---|---|
 | 0 | 스켈레톤 + `types.py` / `loader.py` / `viz.py` / `inspect_zdf.py` | zdf 로딩 성공, `scene_stats.json` 출력, RGB 두 포맷 비교 | ✅ 완료 (2026-07-27): 1224x1024, 유효 75%, rgba_srgb 채택 |
-| 1 | `teach_bin_roi.py` + `bin_frame.py` + `roi.py` | 림 평면 피팅 rms < 2mm, 최상층 밴드 오버레이 육안 확인 | 미착수 |
+| 1 | `teach_rim.py` + `bin_frame.py` + `roi.py` (+ `build_bin_frame.py`) | 림 평면 피팅 rms < 2mm, 최상층 밴드 오버레이 육안 확인 | ✅ 완료 (2026-07-27): RMS 0.46mm, 최상층이 내용물 최상단에 안착 (아래 교정 참조) |
 | 2 | m3 어포던스 + `plane.py` + `pose.py` | 피킹 후보 상위 5개 시각화, 포즈 JSON 출력 | 미착수 |
 | 3 | m1 SAM2 | 과분할/과병합 정도 육안 평가, 처리 시간 측정 | 미착수 |
 | 4 | m2 Grounded-SAM 2 | 인스턴스 분리 품질 비교 | 미착수 |
