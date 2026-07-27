@@ -72,9 +72,9 @@ Zivid는 2D와 3D가 픽셀 단위로 정렬되어 있으므로, 마스크의 `(
 
 리사이즈가 필요한 경우 XYZ를 함께 리사이즈하면 되므로 여전히 불필요하다.
 
-### 확인 필요: rgba vs rgba_srgb
+### 확정: rgba_srgb 채택 (2026-07-27, Phase 0)
 
-SAM2와 Grounding DINO는 일반 sRGB 자연영상으로 학습되었다. Zivid SDK에는 `rgba`와 `rgba_srgb` 두 포맷이 있는데, 어느 쪽이 linear인지 SDK 버전별 거동을 확정하지 못했다. `scripts/inspect_zdf.py`에서 **두 포맷을 각각 PNG로 저장**해 눈으로 비교하는 단계를 넣고, 밝고 자연스러운 쪽을 채택한다.
+SAM2와 Grounding DINO는 일반 sRGB 자연영상으로 학습되었다. `scripts/inspect_zdf.py`로 `image_test.zdf`의 두 포맷을 PNG로 저장해 비교한 결과, **`rgba_srgb`(luminance 114)가 `rgba`(linear, luminance 54)보다 밝고 자연스러워 `rgba_srgb`를 채택**한다. 데이터 계약(2장)의 `rgb = copy_data("rgba_srgb")[:, :, :3]` 그대로 확정.
 
 참고: 사용자가 제공한 테스트 이미지가 전반적으로 어둡고 주변부 감광이 있다. 3D 캡처의 프로젝터 조명으로 찍힌 RGB일 가능성이 높다. **`Settings2D`로 주변광 기준 별도 2D 캡처를 하고 그것을 세그멘테이션 입력으로 쓰는 것**이 성능에 결정적일 수 있다. 3D 캡처의 RGB는 좌표 매핑용으로만 쓴다.
 
@@ -263,7 +263,7 @@ huggingface-hub
 # sam2 는 git clone 후 pip install -e . (별도 설치)
 ```
 
-Python 3.11 확정. 3.12는 open3d 휠 지원이 버전별로 불안정하므로 피한다.
+Python **3.12 확정** (2026-07-27). 당초 3.11로 계획했으나, 개발 머신의 3.12.10 글로벌 환경에 `zivid 2.18.0`·`open3d 0.19.0`·`opencv 4.12`·`numpy 2.2`·`scipy 1.16`이 모두 정상 설치·동작함을 확인 → 3.12 사용. (torch/SAM2도 3.12 지원)
 
 ---
 
@@ -271,7 +271,7 @@ Python 3.11 확정. 3.12는 open3d 휠 지원이 버전별로 불안정하므로
 
 | Phase | 내용 | 검증 기준 | 상태 |
 |---|---|---|---|
-| 0 | 스켈레톤 + `types.py` / `loader.py` / `viz.py` / `inspect_zdf.py` | zdf 로딩 성공, `scene_stats.json` 출력, RGB 두 포맷 비교 | 미착수 |
+| 0 | 스켈레톤 + `types.py` / `loader.py` / `viz.py` / `inspect_zdf.py` | zdf 로딩 성공, `scene_stats.json` 출력, RGB 두 포맷 비교 | ✅ 완료 (2026-07-27): 1224x1024, 유효 75%, rgba_srgb 채택 |
 | 1 | `teach_bin_roi.py` + `bin_frame.py` + `roi.py` | 림 평면 피팅 rms < 2mm, 최상층 밴드 오버레이 육안 확인 | 미착수 |
 | 2 | m3 어포던스 + `plane.py` + `pose.py` | 피킹 후보 상위 5개 시각화, 포즈 JSON 출력 | 미착수 |
 | 3 | m1 SAM2 | 과분할/과병합 정도 육안 평가, 처리 시간 측정 | 미착수 |
