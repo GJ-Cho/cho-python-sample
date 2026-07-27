@@ -204,7 +204,7 @@ SAM2의 프롬프트 그리드는 이 마스크 내부에만 배치한다. 프�
 3. bin frame 높이, 벽면 거리, 패치 반경 충족 여부로 랭킹
 4. 1등 패치 중심 + normal → 피킹 포즈
 
-"물체가 몇 개인지" 알 필요가 없어 중첩·밀착이 문제되지 않는다. **이 장면에서 가장 안 깨지는 방법이므로 데모 실패 방지용으로 먼저 구현할 것.**
+"물체가 몇 개인지" 알 필요가 없어 중첩·밀착이 문제되지 않는다. ~~데모 실패 방지용으로 먼저 구현~~ → **핑거 그리퍼 전환으로 Phase 4(파지 어포던스)로 미룸.** 핑거 파지 어포던스(대향 2점·개폐 폭·클리어런스·파지 축)로 재설계한다.
 
 ### 폐기된 대안
 
@@ -269,7 +269,9 @@ huggingface-hub
 # sam2 는 git clone 후 pip install -e . (별도 설치)
 ```
 
-Python **3.12 확정** (2026-07-27). 당초 3.11로 계획했으나, 개발 머신의 3.12.10 글로벌 환경에 `zivid 2.18.0`·`open3d 0.19.0`·`opencv 4.12`·`numpy 2.2`·`scipy 1.16`이 모두 정상 설치·동작함을 확인 → 3.12 사용. (torch/SAM2도 3.12 지원)
+Python **3.12 확정** (2026-07-27). Phase 0~1은 글로벌 3.12로 검증했고, Phase 2(SAM2)부터는 **전용 venv**를 사용한다.
+
+**전용 venv (Phase 2~, 2026-07-27 구축)**: `C:\Zivid\3rdparty\venv_segpick` (Python 3.12.10). 설치: `torch 2.6.0+cu124`·`torchvision 0.21`(CUDA True, RTX 4060), `zivid 2.18`·`open3d 0.19`·`opencv 5.0`·`scipy 1.18`·`matplotlib 3.11`·`huggingface_hub`, SAM2(editable, `C:\Zivid\3rdparty\sam2`), 체크포인트 `C:\Zivid\3rdparty\checkpoints\sam2.1_hiera_small.pt`(config `configs/sam2.1/sam2.1_hiera_s.yaml`). 모든 스크립트는 이 venv의 python으로 실행: `C:\Zivid\3rdparty\venv_segpick\Scripts\python.exe`.
 
 ---
 
@@ -279,13 +281,13 @@ Python **3.12 확정** (2026-07-27). 당초 3.11로 계획했으나, 개발 머�
 |---|---|---|---|
 | 0 | 스켈레톤 + `types.py` / `loader.py` / `viz.py` / `inspect_zdf.py` | zdf 로딩 성공, `scene_stats.json` 출력, RGB 두 포맷 비교 | ✅ 완료 (2026-07-27): 1224x1024, 유효 75%, rgba_srgb 채택 |
 | 1 | `teach_rim.py` + `bin_frame.py` + `roi.py` (+ `build_bin_frame.py`) | 림 평면 피팅 rms < 2mm, 최상층 밴드 오버레이 육안 확인 | ✅ 완료 (2026-07-27): RMS 0.46mm, 최상층이 내용물 최상단에 안착 (아래 교정 참조) |
-| 2 | m3 어포던스 + `plane.py` + `pose.py` | 피킹 후보 상위 5개 시각화, 포즈 JSON 출력 | 미착수 |
-| 3 | m1 SAM2 | 과분할/과병합 정도 육안 평가, 처리 시간 측정 | 미착수 |
-| 4 | m2 Grounded-SAM 2 | 인스턴스 분리 품질 비교 | 미착수 |
-| 5 | `run_benchmark.py` | 3안 타이밍 + `center_px` 비교표 | 미착수 |
+| 2 | **m1 SAM2 세그멘테이션** (`methods/base.py` + `methods/m1_sam2_toplayer.py`) | 최상층 마스크 → SAM2 분할, 과분할/과병합 육안 평가, 처리 시간 측정 | 미착수 |
+| 3 | **m2 Grounded-SAM 2 세그멘테이션** | 인스턴스 분리 품질 비교 | 미착수 |
+| 4 | **파지 어포던스 & 포즈** (m3 재설계 + `plane.py` + `pose.py`) — **핑거 그리퍼 기준**, 그리퍼 스펙 확정 후 | 피킹 후보 상위 5개 시각화, 파지 포즈 JSON 출력 | 미착수 |
+| 5 | `run_benchmark.py` | 세그멘테이션안 타이밍 + `center_px` 비교표 | 미착수 |
 | 6 | UR3e 연동 | 별 브랜치로 분리 | 미착수 |
 
-**m3를 m1보다 먼저 구현하는 이유**: 세그멘테이션 없이 동작하므로 이 장면에서 가장 안 깨진다. 로봇 피킹 루프의 하한선을 먼저 확보한 뒤 세그멘테이션 기반 방법을 얹는 것이 리스크가 낮다.
+**순서 변경 이유 (2026-07-27)**: 초기 계획은 석션 전제로 "m3(어포던스)를 먼저" 두었으나, 엔드이펙터가 **핑거 그리퍼**로 바뀌면서 파지 어포던스가 복잡해졌다. **세그멘테이션(m1/m2)은 그리퍼와 무관**하므로 먼저 진행하고, 그리퍼에 의존하는 **파지 어포던스(m3)·포즈는 그리퍼 스펙 확정 후(Phase 4)로 미룬다.** m1/m2는 Phase 1의 `top_layer_mask`(빈 내부 최상층)를 입력 프롬프트 영역으로 사용한다.
 
 ---
 
