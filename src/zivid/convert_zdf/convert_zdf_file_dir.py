@@ -174,7 +174,7 @@ def _convert_2_ply(frame: zivid.Frame, file_path: Path) -> None:
 
     """
     # Order vs Unorder , SRGB vs Linear RGB 
-    _3d_object = PLY(file_path, layout=PLY.Layout.ordered, color_space=ColorSpace.srgb)
+    _3d_object = PLY(file_path, layout=PLY.Layout.ordered, color_space=ColorSpace.srgb, include_normals="yes")
     export_frame(frame, _3d_object)
 
 
