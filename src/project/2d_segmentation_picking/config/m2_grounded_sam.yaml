@@ -1,0 +1,27 @@
+# m2 (Grounded-SAM 2) 설정 — PLAN.md 5장 m2
+# Grounding DINO(text→bbox, HF 순수 PyTorch) + SAM2(bbox→mask)
+
+grounding_dino:
+  model_id: IDEA-Research/grounding-dino-tiny   # 컴파일 불필요(순수 PyTorch)
+  box_threshold: 0.30
+  text_threshold: 0.25
+  device: cuda
+
+# 검출 대상 텍스트 프롬프트 (소문자, 마침표로 구분) — 추후 추가/수정 예정
+text_prompt: "pouch. box. bottle. tube. can. bag. pack. bottle cap."
+
+sam2:
+  checkpoint: C:/Zivid/3rdparty/checkpoints/sam2.1_hiera_small.pt
+  config: configs/sam2.1/sam2.1_hiera_s.yaml
+  device: cuda
+
+# 최상층 ROI (Phase 1 산출물) — 후보를 빈 내부 최상층으로 제한
+top_layer:
+  bin_roi: config/bin_roi.json
+  bin_frame: config/bin_frame.json
+  interior_shrink_mm: 50
+  top_band_mm: 50
+
+filter:
+  min_area_px: 300
+  min_overlap: 0.3     # bbox 마스크가 최상층 내부에 이 비율 이상 겹쳐야 채택

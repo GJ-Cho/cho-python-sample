@@ -27,7 +27,7 @@ def main() -> None:
             pass
 
     parser = argparse.ArgumentParser(description="단일 세그멘테이션 방법 실행 + 시각화")
-    parser.add_argument("--method", default="m1", choices=["m1"])  # m2/m3는 이후 Phase
+    parser.add_argument("--method", default="m1", choices=["m1", "m2"])  # m3는 Phase 4
     parser.add_argument("--input", type=Path, default=_PROJECT_DIR / "data/input/image_test.zdf")
     parser.add_argument("--config", type=Path, default=None, help="기본: config/<method>_*.yaml")
     parser.add_argument("--topk", type=int, default=10)
@@ -46,6 +46,11 @@ def main() -> None:
         cfg_path = args.config or (_PROJECT_DIR / "config/m1_sam2.yaml")
         config = yaml.safe_load(cfg_path.read_text(encoding="utf-8"))
         segmenter = M1Sam2TopLayer(config, _PROJECT_DIR)
+    elif args.method == "m2":
+        from methods.m2_grounded_sam import M2GroundedSam
+        cfg_path = args.config or (_PROJECT_DIR / "config/m2_grounded_sam.yaml")
+        config = yaml.safe_load(cfg_path.read_text(encoding="utf-8"))
+        segmenter = M2GroundedSam(config, _PROJECT_DIR)
     else:
         raise SystemExit(f"미구현 방법: {args.method}")
 
