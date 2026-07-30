@@ -52,6 +52,8 @@ $PY scripts/build_bin_frame.py --input data/input/image_test_01.zdf \
 
 `bin_frame_*.json`은 자동 생성물이라 gitignore다. 림 평면 RMS가 2mm를 넘으면 티칭 좌표가 림을 벗어났는지 확인한다 (실측 0.46mm).
 
+> **주의**: 림 평면 피팅은 RANSAC(난수)이라 `build_bin_frame.py`를 다시 돌리면 `bin_frame_*.json`이 미세하게 바뀌고, **그 위에서 계산되는 모든 높이·최상층·기울기 결과가 함께 바뀐다.** 세그멘테이션 자체는 결정적이지만(`PLAN.md` 11장) 이 파일은 그렇지 않다. 기존 결과와 비교할 때는 bin frame을 다시 만들지 말 것.
+
 ## 세그멘테이션 실행
 
 ```bash
@@ -66,12 +68,38 @@ $PY scripts/run_single.py --method m1 --input data/input/image_test_02.zdf \
    --bin-roi config/bin_roi_02.json --bin-frame config/bin_frame_02.json --tag _s02
 ```
 
-산출물은 `data/output/`에:
+## 산출물 네이밍 규칙
 
-- `<stem>_<method><tag>.png` — 마스크 오버레이 + `center_px` 마커
-- `<stem>_<method><tag>_report.json` — 후보 목록, 타이밍(build/cold/warm), 단계별 통계
+| 스크립트 | 파일명 |
+|---|---|
+| `inspect_zdf.py` | `<stem>_rgba_linear.png`, `<stem>_rgba_srgb.png`, `<stem>_scene_stats.json` |
+| `teach_rim.py` | `<stem>_rim_annulus.png` |
+| `build_bin_frame.py` | `<stem>_bin_frame.png` |
+| `run_single.py` | `<stem>_<method><tag>_top<N>.png`, `..._top<N>_report.json` |
 
-`--tag`로 설정을 바꿔가며 결과를 나란히 남길 수 있다.
+`<stem>`은 입력 zdf 이름, `<method>`는 `m1`/`m2`, `<tag>`는 `--tag`로 주는 자유 문자열, `<N>`은 **실제로 그린 마스크 수**다.
+
+`<N>`을 파일명에 넣는 이유: 오버레이는 상위 N개만 그리므로 **같은 결과라도 `--topk`가 다르면 다른 그림이 된다.** 파일명에 없으면 서로 다른 조건의 그림을 같은 조건으로 착각해 비교하게 된다. 후보 전체를 그리려면 `--topk 500`처럼 충분히 크게 준다.
+
+`--tag`는 자유 문자열이라 의미가 파일에 남지 않는다. 그래서 리포트 JSON에 **`config` 전문과 `git`(커밋 해시 + `dirty` 여부)** 를 함께 기록한다. `dirty: true`면 그 커밋만으로는 결과를 재현할 수 없다는 뜻이다.
+
+현재 보관 중인 태그:
+
+| 태그 | 의미 |
+|---|---|
+| `_base` | Phase 2/3 구현 직후 파라미터 (튜닝 전) |
+| `_nogeo` | 튜닝 후 + `geometry.enabled: false` (기하 후처리 기여도 비교용) |
+| `_geo` | 현재 상태 — 튜닝 + 기하 후처리 |
+
+### 무엇을 비교하면 되는가
+
+| 알고 싶은 것 | 비교 |
+|---|---|
+| 기하 후처리 효과 | `image_test_01_m1_nogeo_top40.png` ↔ `image_test_01_m1_geo_top30.png` |
+| 파라미터 튜닝 효과 | `image_test_01_m1_base_top4.png` ↔ `image_test_01_m1_nogeo_top40.png` |
+| m1 vs m2 | `image_test_01_m1_geo_top30.png` ↔ `image_test_01_m2_geo_top28.png` |
+| 장면 난이도 | `image_test_01_m1_geo_top30.png` ↔ `image_test_02_m1_geo_top50.png` |
+| 수치·기각 사유 | `*_report.json`의 `stats.rejected`, `topk[].inlier_ratio` |
 
 ## 방법 비교 (2026-07-30, 장면 2개)
 

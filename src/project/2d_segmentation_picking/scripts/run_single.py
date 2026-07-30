@@ -4,19 +4,45 @@
   C:/Zivid/3rdparty/venv_segpick/Scripts/python.exe \
     src/project/2d_segmentation_picking/scripts/run_single.py --method m1 --topk 10
 
-출력: 후보 요약 JSON(stdout) + 마스크/센터 오버레이 PNG(data/output).
+출력 (data/output):
+  <stem>_<method><tag>_top<N>.png        마스크/센터 오버레이. N = 실제로 그린 마스크 수
+  <stem>_<method><tag>_top<N>_report.json 후보 요약 + 타이밍 + config 스냅샷 + git 커밋
+
+파일명에 N을 넣는 이유: 오버레이는 상위 N개만 그리므로 **같은 결과라도 --topk가 다르면
+다른 그림이 된다.** 파일명에 없으면 서로 다른 조건의 그림을 같은 조건으로 착각해 비교하게 된다.
+리포트에 config 전문과 git 커밋을 남기는 이유: 어떤 파라미터로 뽑은 결과인지 역추적하려면
+파일명 태그만으로는 부족하다(태그는 자유 문자열이라 의미가 기록되지 않는다).
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import subprocess
 import sys
 import time
 from pathlib import Path
 
 _PROJECT_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_PROJECT_DIR))
+
+
+def _git_info(cwd: Path) -> dict:
+    """현재 커밋 해시와 작업트리 변경 여부. git이 없거나 실패하면 None으로 채운다."""
+    def run(*cmd):
+        try:
+            out = subprocess.run(cmd, cwd=str(cwd), capture_output=True, text=True, timeout=10)
+            return out.stdout.strip() if out.returncode == 0 else None
+        except (OSError, subprocess.SubprocessError):
+            return None
+
+    commit = run("git", "rev-parse", "--short", "HEAD")
+    status = run("git", "status", "--porcelain")
+    return {
+        "commit": commit,
+        # dirty면 커밋 해시만으로 결과를 재현할 수 없다는 뜻이므로 반드시 함께 남긴다
+        "dirty": None if status is None else bool(status),
+    }
 
 
 def main() -> None:
@@ -84,6 +110,10 @@ def main() -> None:
     warm_dt = time.time() - t0
 
     topk = candidates[: args.topk]
+    # 파일명 접미사는 **실제로 그린 마스크 수**로 만든다. 요청값(--topk)이 후보 수보다
+    # 크면 그림에는 후보 수만큼만 담기므로, 요청값을 쓰면 파일명이 내용을 잘못 알린다.
+    stem = f"{args.input.stem}_{args.method}{args.tag}_top{len(topk)}"
+
     report = {
         "method": args.method,
         "input": str(args.input),
@@ -92,7 +122,13 @@ def main() -> None:
         "predict_time_s": round(cold_dt, 3),
         "predict_time_warm_s": round(warm_dt, 3),
         "num_candidates": len(candidates),
+        "topk_requested": args.topk,
+        "topk_drawn": len(topk),
         "stats": getattr(segmenter, "stats", {}),
+        # 재현을 위한 출처 정보 — 파일명 태그는 자유 문자열이라 의미가 기록되지 않는다
+        "git": _git_info(_PROJECT_DIR),
+        "config_path": str(cfg_path),
+        "config": config,
         "topk": [
             {"rank": i, "center_px": c.center_px, "score": round(c.score, 2), **c.meta}
             for i, c in enumerate(topk)
@@ -102,14 +138,14 @@ def main() -> None:
 
     # 리포트도 디스크에 남긴다 — 튜닝/벤치마크 수치가 stdout에만 남으면 재현이 불가능하다
     args.output_dir.mkdir(parents=True, exist_ok=True)
-    out_json = args.output_dir / f"{args.input.stem}_{args.method}{args.tag}_report.json"
+    out_json = args.output_dir / f"{stem}_report.json"
     out_json.write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
     print(f"\n[리포트 저장] {out_json}", file=sys.stderr)
 
     # 시각화: 상위 마스크 오버레이 + center 마커
     overlay = overlay_masks(scene.rgb, [c.mask for c in topk], alpha=0.5)
     overlay = draw_candidates_2d(overlay, topk)
-    out_png = args.output_dir / f"{args.input.stem}_{args.method}{args.tag}.png"
+    out_png = args.output_dir / f"{stem}.png"
     mpimg.imsave(str(out_png), overlay)
     print(f"\n[오버레이 저장] {out_png}", file=sys.stderr)
 
