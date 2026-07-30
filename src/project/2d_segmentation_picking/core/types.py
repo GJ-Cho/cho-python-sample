@@ -8,6 +8,7 @@ Zivid 네이티브 데이터 형태를 기준으로 하며, gripper-agnostic하�
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from functools import cached_property
 
 import numpy as np
 
@@ -34,9 +35,14 @@ class SceneData:
     def width(self) -> int:
         return int(self.rgb.shape[1])
 
-    @property
+    @cached_property
     def valid_mask(self) -> np.ndarray:
-        """유효한(비 NaN) 3D 포인트를 나타내는 (H, W) bool 마스크."""
+        """유효한(비 NaN) 3D 포인트를 나타내는 (H, W) bool 마스크.
+
+        **캐시된다.** 1224x1024 전체 NaN 검사가 약 10ms인데 기하 후처리에서 마스크마다
+        호출되므로(수십 회) 매번 재계산하면 그것만으로 수백 ms를 쓴다.
+        xyz를 나중에 바꾸면 캐시가 낡으므로, 바꿀 일이 있으면 SceneData를 새로 만든다.
+        """
         return ~np.isnan(self.xyz).any(axis=2)
 
 

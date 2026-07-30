@@ -151,7 +151,9 @@ class M2GroundedSam(Segmenter):
         rejected = {"area": 0, "overlap": 0}
         # 빈 자체가 "box"/"container"로 검출되어 최상층 전체를 덮는 마스크를 막는다
         max_area = f.get("max_area_frac", 1.0) * self.stats["top_layer_px"]
-        candidates = []
+
+        # --- 면적 / 최상층 겹침 필터 ---
+        segs, keep_scores, metas = [], [], []
         for i, seg in enumerate(masks):
             area = int(seg.sum())
             if area < f["min_area_px"] or area > max_area:
@@ -161,7 +163,28 @@ class M2GroundedSam(Segmenter):
             if overlap < f["min_overlap"]:
                 rejected["overlap"] += 1
                 continue
+            label = labels[i] if labels is not None and i < len(labels) else ""
+            segs.append(seg)
+            keep_scores.append(float(scores[i]))
+            metas.append({
+                "label": str(label),
+                "box_score": round(float(scores[i]), 3),
+                "overlap": round(float(overlap), 3),
+            })
+        self.stats["n_masks_filtered"] = len(segs)
 
+        # --- 기하 후처리 (core/plane.py, m1과 동일 코드) ---
+        # 병합은 기본 off다: m2의 마스크는 이미 인스턴스 단위이고, 겹쳐 쌓인 동일 평면
+        # 물체를 병합하면 m2의 장점인 인스턴스 분리를 스스로 훼손한다.
+        from core import plane as plane_mod
+
+        segs, metas, planes, g_stats = plane_mod.refine_masks(
+            scene, segs, keep_scores, metas, n_up, self.cfg.get("geometry", {}))
+        rejected.update(g_stats.pop("rejected"))
+        self.stats.update(g_stats)
+
+        candidates = []
+        for seg, meta, pl in zip(segs, metas, planes):
             ys, xs = np.where(seg)
             cy, cx = ys.mean(), xs.mean()
             k = np.argmin((ys - cy) ** 2 + (xs - cx) ** 2)
@@ -177,18 +200,16 @@ class M2GroundedSam(Segmenter):
                 xyz_seg = xyz_seg[~np.isnan(xyz_seg).any(axis=1)]
                 pos = np.median(xyz_seg, axis=0) if len(xyz_seg) else None
 
-            label = labels[i] if labels is not None and i < len(labels) else ""
             candidates.append(PickCandidate(
                 center_px=center, mask=seg,
                 position_mm=None if pos is None else np.asarray(pos, dtype=float),
-                normal=None, plane_rms_mm=None,
-                score=float(scores[i]),  # Grounding DINO 신뢰도
+                normal=None if pl is None else pl.normal,
+                plane_rms_mm=None if pl is None else pl.rms_mm,
+                score=float(meta["box_score"]),  # Grounding DINO 신뢰도
                 meta={
-                    "label": str(label),
-                    "box_score": round(float(scores[i]), 3),
-                    "area_px": area,
+                    "area_px": int(seg.sum()),
                     "mean_h_mm": None if np.isnan(mean_h) else round(mean_h, 2),
-                    "overlap": round(float(overlap), 3),
+                    **meta,
                 },
             ))
 

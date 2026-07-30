@@ -35,3 +35,28 @@ filter:
   max_area_frac: 0.5   # 최상층 면적의 이 비율 초과 마스크 제거.
                        # 빈 자체가 "box"로 검출되어 전체를 덮는 것을 막는다(m2에서 실제로 발생).
   min_overlap: 0.15    # bbox 마스크가 최상층에 이 비율 이상 닿아야 채택
+
+# 기하 후처리 — m1과 동일 코드(core/plane.py refine_masks). 비교 가능하게 기준을 맞춘다.
+geometry:
+  enabled: true
+  dedupe_iou: 0.75           # 라벨이 달라도 마스크가 같은 중복 제거(box NMS로는 남는다)
+  erode_px: 3
+  max_fit_points: 2000
+  inlier_thresh_mm: 1.5
+  trim_iterations: 3
+  min_plane_points: 50
+
+  merge:
+    enabled: false           # **의도적으로 off**. m2 마스크는 이미 인스턴스 단위이고,
+                             # 겹쳐 쌓인 동일 평면 물체를 병합하면 m2의 장점인 인스턴스
+                             # 분리를 스스로 훼손한다. m1의 과분할 해소와는 상황이 다르다.
+    normal_deg: 8
+    offset_mm: 3
+    dilate_px: 5
+
+  reject:
+    require_plane: true
+    max_plane_rms_all_mm: null
+    min_inlier_ratio: null
+    max_depth_span_mm: null
+    max_tilt_deg: null

@@ -3,12 +3,16 @@
 절차:
   1) Phase 1의 top_layer_mask(빈 내부 최상층)를 구함
   2) SAM2 Automatic Mask Generator의 프롬프트 격자를 **최상층 내부에만** 배치
-  3) multimask_output=False로 포인트당 마스크 1개 (과분할 억제)
-  4) 최상층 겹침/면적으로 마스크 필터
+  3) 최상층 겹침/면적으로 마스크 필터
+  4) 기하 후처리 (core/plane.py) — 중복 제거 → 평면 피팅 → 동일 평면 인접 마스크 병합
+     → 재피팅 → 평면성/두께/기울기 기각
   5) 높이(최상단 우선) 기준 랭킹 → PickCandidate
 
-이 단계는 **순수 세그멘테이션**이다. 평면 피팅/파지 포즈(그리퍼 의존)는 Phase 4로 미룬다.
-따라서 normal/plane_rms는 채우지 않는다(None). position_mm(center의 XYZ)만 참고로 채운다.
+4단계가 RGB 세그멘테이션의 과분할을 XYZ로 정련하는 자리다(PLAN 5장 m1 5·6단계).
+`geometry.enabled: false`로 끄면 3단계까지의 순수 RGB 결과가 나온다 — 기여도 비교용.
+
+평면 피팅 결과는 `normal`/`plane_rms_mm`에 채운다. 다만 **파지 포즈 생성(그리퍼 의존)은
+Phase 4**이며, 여기서는 세그멘테이션 정련과 신뢰도 지표까지만 다룬다.
 """
 
 from __future__ import annotations
@@ -130,8 +134,12 @@ class M1Sam2TopLayer(Segmenter):
 
         h_map = roi_mod.height_map(scene, n_up, p_floor)
         f = self.cfg["filter"]
-        rejected = {"area": 0, "overlap": 0, "no_height": 0}
-        candidates = []
+        rejected = {"area": 0, "overlap": 0, "no_height": 0, "dup": 0, "plane_fit": 0,
+                    "plane_rms": 0, "inlier_ratio": 0, "depth_span": 0, "tilt": 0}
+        self.stats["n_masks_amg"] = len(masks)
+
+        # --- 3단계: 면적 / 최상층 겹침 필터 ---
+        segs, scores, metas = [], [], []
         for m in masks:
             seg = m["segmentation"].astype(bool)
             area = int(seg.sum())
@@ -144,7 +152,26 @@ class M1Sam2TopLayer(Segmenter):
             if overlap < f["min_overlap"]:
                 rejected["overlap"] += 1
                 continue
+            segs.append(seg)
+            scores.append(float(m.get("predicted_iou", 0.0)))
+            metas.append({
+                "overlap": round(float(overlap), 3),
+                "predicted_iou": round(float(m.get("predicted_iou", 0)), 3),
+                "stability_score": round(float(m.get("stability_score", 0)), 3),
+            })
+        self.stats["n_masks_filtered"] = len(segs)
 
+        # --- 4단계: 기하 후처리 (XYZ로 RGB 세그멘테이션 정련) ---
+        from core import plane as plane_mod
+
+        segs, metas, planes, g_stats = plane_mod.refine_masks(
+            scene, segs, scores, metas, n_up, self.cfg.get("geometry", {}))
+        rejected.update(g_stats.pop("rejected"))
+        self.stats.update(g_stats)
+
+        # --- 5단계: 후보 생성 + 높이 랭킹 ---
+        candidates = []
+        for seg, meta, pl in zip(segs, metas, planes):
             ys, xs = np.where(seg)
             cy, cx = ys.mean(), xs.mean()
             k = np.argmin((ys - cy) ** 2 + (xs - cx) ** 2)  # centroid를 마스크 픽셀로 스냅
@@ -167,22 +194,16 @@ class M1Sam2TopLayer(Segmenter):
                 center_px=center,
                 mask=seg,
                 position_mm=None if pos is None else np.asarray(pos, dtype=float),
-                normal=None,          # Phase 4(파지)로 미룸
-                plane_rms_mm=None,    # Phase 4
-                score=mean_h,         # 최상단 우선
+                normal=None if pl is None else pl.normal,
+                plane_rms_mm=None if pl is None else pl.rms_mm,
+                score=mean_h,         # 최상단 우선. 평면성 가중 랭킹은 Phase 4(파지)에서 판단
                 meta={
-                    "area_px": area,
+                    "area_px": int(seg.sum()),
                     "mean_h_mm": round(mean_h, 2),
-                    "overlap": round(float(overlap), 3),
-                    "predicted_iou": round(float(m.get("predicted_iou", 0)), 3),
-                    "stability_score": round(float(m.get("stability_score", 0)), 3),
+                    **meta,
                 },
             ))
 
         candidates.sort(key=lambda c: c.score, reverse=True)  # 높이 내림차순
-        self.stats.update({
-            "n_masks_amg": len(masks),
-            "n_candidates": len(candidates),
-            "rejected": rejected,
-        })
+        self.stats.update({"n_candidates": len(candidates), "rejected": rejected})
         return candidates

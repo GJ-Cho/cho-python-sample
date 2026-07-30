@@ -77,16 +77,33 @@ $PY scripts/run_single.py --method m1 --input data/input/image_test_02.zdf \
 
 | | m1 SAM2 top-layer | m2 Grounded-SAM 2 |
 |---|---|---|
-| 입력 | RGB + XYZ | RGB (+XYZ는 포즈용) |
+| 입력 | RGB + XYZ | RGB + XYZ |
 | 학습 데이터 / 프롬프트 | 없음 — 진짜 unknown | 텍스트 어휘 필요 |
-| 후보 수 (scene01 / scene02) | 40 / 62 | 28 / 43 |
-| warm 처리 시간 (중앙값) | 1.01s / 1.39s | 0.92s / 1.08s |
+| 후보 수 (scene01 / scene02) | 30 / 50 | 28 / 42 |
+| warm 처리 시간 | 0.98s / 1.39s | 0.96s / 1.22s |
 | 모델 로드 (cold, 1회) | 약 3~10s | 약 12~38s |
-| 성격 | 마스크가 많고 경계가 거칠다. 과분할 경향 | 인스턴스가 깔끔하나 어휘 밖 물체를 놓친다 |
+| 기하 병합 | 사용 (과분할 해소) | **off** — 마스크가 이미 인스턴스 단위 |
+| 성격 | 마스크가 많고 경계가 거칠다 | 인스턴스가 깔끔하나 어휘 밖 물체를 놓친다 |
 
-파라미터 스윕 근거와 지배 인자 순위는 `PLAN.md` 10장. 타이밍은 **방법 1개만 로드한 독립 프로세스**에서 재야 한다 — m1/m2를 한 프로세스에 함께 올리면 8GB VRAM 압박으로 최대 2배까지 부풀었다.
+파라미터 스윕 근거는 `PLAN.md` 10장, 기하 후처리는 11장. 타이밍은 **방법 1개만 로드한 독립 프로세스**에서 재야 한다 — m1/m2를 한 프로세스에 함께 올리면 8GB VRAM 압박으로 최대 2배까지 부풀었다.
 
 주의: 후보 수가 많은 것이 곧 품질이 좋은 것은 아니다. 현재 비교는 후보 수와 육안 확인뿐이고, recall·마스크 중복률 같은 정량 지표는 Phase 5(`run_benchmark.py`)에서 도입한다.
+
+## 기하 후처리 (`core/plane.py`)
+
+RGB 세그멘테이션 결과를 XYZ로 정련하는 단계다. m1/m2가 `plane.refine_masks()`를 공유한다.
+
+```
+중복 제거(마스크 IoU) → 마스크별 평면 피팅 → 동일 평면 인접 마스크 병합 → 재피팅 → 기각
+```
+
+`config/*.yaml`의 `geometry` 블록으로 제어하고, `geometry.enabled: false`로 두면 순수 RGB 결과가 나온다(기여도 비교용). 평면 지표는 후보 `meta`와 리포트 JSON에 실린다.
+
+읽을 때 주의할 점:
+
+- **`plane_rms_mm`(인라이어 기준)만 보고 평면성을 판단하면 안 된다.** 인라이어가 "평면에서 `inlier_thresh_mm` 이내"로 정의되므로 rms는 구조적으로 그 임계 이하로 묶인다. 두 물체를 걸친 마스크도 작게 나온다. 실제 판별력은 **`inlier_ratio`** 와 `plane_rms_all_mm`/`depth_span_mm`(전체 포인트 기준)에 있다.
+- `tilt_deg`는 bin frame `n_up` 기준 **절대** 각도다. 병합에 쓰는 normal 각도차는 **상대량**이라 좌표계와 무관하다 — 둘을 섞지 말 것(`PLAN.md` 4장).
+- `reject` 임계는 전부 `null`(끔)이다. 정답 라벨 없이 컷오프를 정하면 근거 없는 튜닝이 되므로 평가 세트 도입 후 정한다.
 
 ## 트러블슈팅
 
@@ -99,3 +116,7 @@ $PY scripts/run_single.py --method m1 --input data/input/image_test_02.zdf \
 | m2 검출이 거의 없음 | `box_threshold`가 높다. 0.30은 어수선한 빈에서 대부분을 놓친다 (현재 0.15) |
 | `post_process_grounded_object_detection` 인자 오류 | transformers 5.x는 `threshold=`, 구버전은 `box_threshold=` |
 | 절대 높이 게이팅이 전부 잘라냄 | `bin_depth`가 추정값이면 p_floor가 부정확하다. 절대 게이팅은 기본 off, 상대 밴드만 사용 |
+| 한 물체가 여러 마스크로 갈라짐 | `geometry.merge`를 켠다. 안 붙으면 `normal_deg`/`offset_mm`/`dilate_px`를 키운다 |
+| 서로 다른 물체가 하나로 병합됨 | `merge.dilate_px`를 줄여 실제로 맞닿은 쌍만 남긴다. `normal_deg`/`offset_mm`도 조인다 |
+| 후보가 `plane_fit`으로 기각됨 | 유효 XYZ가 `min_plane_points` 미만 — 투명/반사 물체의 NaN 홀. `reject.require_plane: false`로 통과시킬 수 있으나 기하 평가가 불가능한 후보다 |
+| 기하 단계가 느림 | 전체 영상 연산이 섞였는지 확인. `valid_mask`는 캐시되어야 하고, 마스크 연산은 경계 상자 안에서 해야 한다(`PLAN.md` 11장) |
