@@ -5,10 +5,13 @@ RGB 위에서 빈 외곽 사각형의 4꼭짓점을 **시계방향**으로 클�
 셋업이 고정이면 1회만 하면 된다.
 
 사용:
-  python scripts/teach_rim.py                       # 기본 입력 image_test.zdf, band 20mm
+  python scripts/teach_rim.py                       # 기본 입력 image_test_01.zdf, band 20mm
   python scripts/teach_rim.py --band-mm 25 --input path/to.zdf
 
-주의: 대화형 클릭이 필요하므로 사용자가 직접 실행한다 (Claude Code는 클릭 불가).
+비대화형(좌표를 이미 아는 경우 — 클릭 불가 환경):
+  python scripts/teach_rim.py --corners "263,133 263,1143 967,1143 967,133" --no-show
+
+주의: --corners 없이 실행하면 대화형 클릭이 필요하므로 사용자가 직접 실행한다.
 """
 
 from __future__ import annotations
@@ -42,9 +45,13 @@ def main() -> None:
             pass
 
     parser = argparse.ArgumentParser(description="림 외곽 4꼭짓점 티칭 → 림 밴드 config 저장")
-    parser.add_argument("--input", type=Path, default=_PROJECT_DIR / "data/input/image_test.zdf")
+    parser.add_argument("--input", type=Path, default=_PROJECT_DIR / "data/input/image_test_01.zdf")
     parser.add_argument("--band-mm", type=float, default=20.0, help="림 밴드 두께(mm)")
-    parser.add_argument("--config", type=Path, default=_PROJECT_DIR / "config/bin_roi.json")
+    parser.add_argument("--config", type=Path, default=_PROJECT_DIR / "config/bin_roi_01.json")
+    parser.add_argument("--corners", type=str, default=None,
+                        help='비대화형 꼭짓점 "row,col row,col row,col row,col" (시계방향). '
+                             "지정하면 클릭 없이 바로 저장한다.")
+    parser.add_argument("--no-show", action="store_true", help="미리보기 창을 띄우지 않는다(PNG는 저장)")
     args = parser.parse_args()
 
     import matplotlib.pyplot as plt
@@ -58,17 +65,25 @@ def main() -> None:
 
     scene = _load_scene(args.input)
 
-    # --- 4꼭짓점 클릭 (시계방향) ---
-    fig, ax = plt.subplots(figsize=(11, 9))
-    ax.imshow(scene.rgb)
-    ax.set_title("빈 외곽 사각형의 4꼭짓점을 시계방향으로 클릭 (좌상단→우상단→우하단→좌하단)\n"
-                 "잘못 찍으면 마우스 오른쪽 클릭으로 취소, Enter로 확정")
-    pts = plt.ginput(4, timeout=0, show_clicks=True)  # (x=col, y=row)
-    plt.close(fig)
+    # --- 4꼭짓점: 비대화형(--corners) 또는 클릭 (시계방향) ---
+    if args.corners:
+        try:
+            corners_rc = [[int(v) for v in tok.split(",")] for tok in args.corners.split()]
+        except ValueError as e:
+            raise SystemExit(f'--corners 형식 오류: "row,col row,col row,col row,col" ({e})')
+        if len(corners_rc) != 4 or any(len(c) != 2 for c in corners_rc):
+            raise SystemExit(f"4개의 row,col 쌍이 필요합니다 (입력: {corners_rc})")
+    else:
+        fig, ax = plt.subplots(figsize=(11, 9))
+        ax.imshow(scene.rgb)
+        ax.set_title("빈 외곽 사각형의 4꼭짓점을 시계방향으로 클릭 (좌상단→우상단→우하단→좌하단)\n"
+                     "잘못 찍으면 마우스 오른쪽 클릭으로 취소, Enter로 확정")
+        pts = plt.ginput(4, timeout=0, show_clicks=True)  # (x=col, y=row)
+        plt.close(fig)
 
-    if len(pts) != 4:
-        raise SystemExit(f"4점이 필요합니다 (입력: {len(pts)}점)")
-    corners_rc = [[int(round(y)), int(round(x))] for (x, y) in pts]
+        if len(pts) != 4:
+            raise SystemExit(f"4점이 필요합니다 (입력: {len(pts)}점)")
+        corners_rc = [[int(round(y)), int(round(x))] for (x, y) in pts]
 
     # --- 림 밴드 미리보기 ---
     annulus = roi.rim_annulus_mask(scene, corners_rc, args.band_mm)
@@ -98,10 +113,11 @@ def main() -> None:
     mpimg.imsave(str(out_png), overlay)
     print(f"[오버레이 저장] {out_png}", file=sys.stderr)
 
-    fig2, ax2 = plt.subplots(figsize=(11, 9))
-    ax2.imshow(overlay)
-    ax2.set_title(f"림 밴드 미리보기 (band={args.band_mm}mm, 유효 {n_valid}px) — 창을 닫으면 종료")
-    plt.show()
+    if not args.no_show:
+        fig2, ax2 = plt.subplots(figsize=(11, 9))
+        ax2.imshow(overlay)
+        ax2.set_title(f"림 밴드 미리보기 (band={args.band_mm}mm, 유효 {n_valid}px) — 창을 닫으면 종료")
+        plt.show()
 
 
 if __name__ == "__main__":

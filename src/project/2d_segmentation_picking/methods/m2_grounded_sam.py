@@ -31,12 +31,14 @@ class M2GroundedSam(Segmenter):
         self.project_dir = Path(project_dir)
         self._gd_model = None  # Grounding DINO
         self._sam_predictor = None
+        self.stats: dict = {}  # 직전 predict의 단계별 통계 (튜닝/벤치마크용)
 
     def _resolve(self, p: str) -> Path:
         p = Path(p)
         return p if p.is_absolute() else (self.project_dir / p)
 
-    def _build(self):
+    def build(self):
+        """Grounding DINO + SAM2 로드 (1회). 사이클 타임 측정 시 predict 전에 호출한다."""
         if self._gd_model is not None:
             return
         import torch
@@ -65,6 +67,30 @@ class M2GroundedSam(Segmenter):
         top_mask, _ = roi_mod.top_layer_mask(scene, n_up, p_floor, roi_2d=interior, band_mm=tl["top_band_mm"])
         return top_mask, n_up, p_floor
 
+    @staticmethod
+    def _nms(boxes: np.ndarray, scores: np.ndarray, iou_thresh: float) -> np.ndarray:
+        """클래스 무관 NMS. 남길 인덱스를 점수 내림차순으로 반환한다.
+
+        Grounding DINO는 텍스트 구(phrase)별로 박스를 내므로 같은 물체가 여러 라벨로
+        중복 검출된다. threshold를 낮출 때 중복이 급증하므로 NMS로 정리한다.
+        """
+        order = scores.argsort()[::-1]
+        x1, y1, x2, y2 = boxes[:, 0], boxes[:, 1], boxes[:, 2], boxes[:, 3]
+        areas = np.maximum(0.0, x2 - x1) * np.maximum(0.0, y2 - y1)
+        keep = []
+        while order.size > 0:
+            i = order[0]
+            keep.append(i)
+            if order.size == 1:
+                break
+            rest = order[1:]
+            iw = np.maximum(0.0, np.minimum(x2[i], x2[rest]) - np.maximum(x1[i], x1[rest]))
+            ih = np.maximum(0.0, np.minimum(y2[i], y2[rest]) - np.maximum(y1[i], y1[rest]))
+            inter = iw * ih
+            iou = inter / np.maximum(areas[i] + areas[rest] - inter, 1e-6)
+            order = rest[iou <= iou_thresh]
+        return np.array(keep, dtype=int)
+
     def _detect_boxes(self, rgb):
         """Grounding DINO로 텍스트 프롬프트에 해당하는 bbox(xyxy)/score/label 검출."""
         import torch
@@ -85,17 +111,30 @@ class M2GroundedSam(Segmenter):
     def predict(self, scene) -> list:
         import torch
 
-        self._build()
+        self.build()
+        self.stats = {"top_layer_px": 0, "n_boxes": 0, "n_boxes_nms": 0, "n_candidates": 0,
+                      "rejected": {"area": 0, "overlap": 0}}
         top_mask, n_up, p_floor = self._top_layer(scene)
-        if int(top_mask.sum()) == 0:
+        self.stats["top_layer_px"] = int(top_mask.sum())
+        if self.stats["top_layer_px"] == 0:
             return []
 
         results = self._detect_boxes(scene.rgb)
         boxes = results["boxes"].detach().cpu().numpy()
         scores = results["scores"].detach().cpu().numpy()
         labels = results.get("text_labels", results.get("labels"))
+        self.stats["n_boxes"] = int(len(boxes))
         if len(boxes) == 0:
             return []
+
+        # 라벨 간 중복 박스 제거 (threshold를 낮추면 필수)
+        nms_thresh = self.cfg["grounding_dino"].get("box_nms_thresh")
+        if nms_thresh is not None and len(boxes) > 1:
+            keep = self._nms(boxes, scores, float(nms_thresh))
+            boxes, scores = boxes[keep], scores[keep]
+            if labels is not None:
+                labels = [labels[i] for i in keep]
+        self.stats["n_boxes_nms"] = int(len(boxes))
 
         # SAM2로 각 bbox → 마스크
         self._sam_predictor.set_image(scene.rgb)
@@ -109,13 +148,18 @@ class M2GroundedSam(Segmenter):
 
         h_map = roi_mod.height_map(scene, n_up, p_floor)
         f = self.cfg["filter"]
+        rejected = {"area": 0, "overlap": 0}
+        # 빈 자체가 "box"/"container"로 검출되어 최상층 전체를 덮는 마스크를 막는다
+        max_area = f.get("max_area_frac", 1.0) * self.stats["top_layer_px"]
         candidates = []
         for i, seg in enumerate(masks):
             area = int(seg.sum())
-            if area < f["min_area_px"]:
+            if area < f["min_area_px"] or area > max_area:
+                rejected["area"] += 1
                 continue
             overlap = (seg & top_mask).sum() / max(area, 1)
             if overlap < f["min_overlap"]:
+                rejected["overlap"] += 1
                 continue
 
             ys, xs = np.where(seg)
@@ -149,4 +193,5 @@ class M2GroundedSam(Segmenter):
             ))
 
         candidates.sort(key=lambda c: c.score, reverse=True)  # 검출 신뢰도 내림차순
+        self.stats.update({"n_candidates": len(candidates), "rejected": rejected})
         return candidates

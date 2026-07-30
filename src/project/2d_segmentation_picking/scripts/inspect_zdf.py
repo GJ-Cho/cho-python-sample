@@ -85,7 +85,7 @@ def main() -> None:
             pass
 
     parser = argparse.ArgumentParser(description="ZDF 씬 통계 및 RGB 포맷 비교")
-    parser.add_argument("--input", type=Path, default=_PROJECT_DIR / "data/input/image_test.zdf")
+    parser.add_argument("--input", type=Path, default=_PROJECT_DIR / "data/input/image_test_01.zdf")
     parser.add_argument("--output-dir", type=Path, default=_PROJECT_DIR / "data/output")
     parser.add_argument("--save-npz", action="store_true", help="장면을 npz로도 저장")
     args = parser.parse_args()

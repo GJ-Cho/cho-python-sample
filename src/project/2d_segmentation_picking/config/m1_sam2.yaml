@@ -1,5 +1,9 @@
 # m1 (SAM2 최상층 세그멘테이션) 설정 — PLAN.md 5장 m1
 # 경로는 프로젝트 루트(2d_segmentation_picking) 기준 상대경로 또는 절대경로.
+#
+# 2026-07-30 튜닝: 검출 수 4→40(scene01) / 8→62(scene02), warm 1.01/1.39s(중앙값).
+# 스윕 결론은 PLAN.md 10장 참조. 지배 인자는 top_band_mm > multimask_output
+# > pred_iou/stability > min_overlap 이고, points_per_side는 효율이 가장 낮았다.
 
 sam2:
   checkpoint: C:/Zivid/3rdparty/checkpoints/sam2.1_hiera_small.pt
@@ -8,21 +12,27 @@ sam2:
 
 # SAM2 Automatic Mask Generator 파라미터
 amg:
-  points_per_side: 32          # 전체 격자 밀도(최상층 내부 점만 프롬프트로 사용)
-  pred_iou_thresh: 0.80
-  stability_score_thresh: 0.90
+  points_per_side: 16          # 최상층 bbox 내부 격자 밀도. 시간이 프롬프트 수에 비례하므로
+                               # 밀도보다 밴드 커버리지(top_band_mm)에 예산을 쓰는 편이 이득이다.
+  grid_mode: bbox              # bbox: 최상층 bbox에 격자 / global: 전체 영상에 격자(옛 동작)
+  pred_iou_thresh: 0.70        # 0.80은 흐트러진 파우치/반사 표면을 과도하게 탈락시켰다
+  stability_score_thresh: 0.85 # 동일
   min_mask_region_area: 200    # AMG 내부 소영역 제거(px)
-  multimask_output: false      # 포인트당 마스크 1개 — 과분할 억제(가장 효과 큰 설정)
+  multimask_output: true       # AMG 본래 동작(포인트당 3개 → IoU/stability/NMS로 정리).
+                               # false로 두면 후보가 1/3로 줄어 검출이 급감한다.
 
 # 최상층 ROI (Phase 1 산출물 재사용)
 top_layer:
-  bin_roi: config/bin_roi.json
-  bin_frame: config/bin_frame.json
+  bin_roi: config/bin_roi_01.json
+  bin_frame: config/bin_frame_01.json
   interior_shrink_mm: 50       # 사면 벽 제외
-  top_band_mm: 50              # 최상층 상대 밴드 두께
+  top_band_mm: 120             # 최상층 상대 밴드 두께(ROI 내 p99 기준). 검출 수의 지배 인자.
+                               # 50 = 최상단 한 겹만, 250 ≈ 빈 내부 전체.
 
 # 마스크 필터
 filter:
   min_area_px: 300             # 너무 작은 마스크 제거
   max_area_frac: 0.85          # 최상층 면적의 이 비율 초과 마스크 제거(벽/전체 덩어리)
-  min_overlap: 0.5             # 마스크가 최상층 내부에 이 비율 이상 겹쳐야 채택
+  min_overlap: 0.15            # 마스크가 최상층에 이 비율 이상 "닿아야" 채택.
+                               # 프롬프트가 이미 최상층 내부에만 있으므로 느슨해도 된다.
+                               # 0.5는 밴드 아래로 이어지는 물체를 통째로 탈락시켰다.

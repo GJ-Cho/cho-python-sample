@@ -18,6 +18,13 @@ class Segmenter(ABC):
 
     requires_xyz: bool = False
 
+    def build(self) -> None:
+        """모델 로드/워밍업. 사이클 타임 측정에서 제외하려면 predict 전에 1회 호출한다.
+
+        기본은 no-op이다. predict()는 build()가 호출되지 않아도 동작해야 한다
+        (내부에서 지연 빌드). 재호출은 무해해야 한다.
+        """
+
     @abstractmethod
     def predict(self, scene) -> list:
         """SceneData를 받아 PickCandidate 리스트를 반환한다 (score 내림차순)."""

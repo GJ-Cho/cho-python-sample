@@ -32,9 +32,9 @@ def main() -> None:
             pass
 
     parser = argparse.ArgumentParser(description="Bin frame 계산 + 최상층 마스크 검증")
-    parser.add_argument("--input", type=Path, default=_PROJECT_DIR / "data/input/image_test.zdf")
-    parser.add_argument("--config-roi", type=Path, default=_PROJECT_DIR / "config/bin_roi.json")
-    parser.add_argument("--config-frame", type=Path, default=_PROJECT_DIR / "config/bin_frame.json")
+    parser.add_argument("--input", type=Path, default=_PROJECT_DIR / "data/input/image_test_01.zdf")
+    parser.add_argument("--config-roi", type=Path, default=_PROJECT_DIR / "config/bin_roi_01.json")
+    parser.add_argument("--config-frame", type=Path, default=_PROJECT_DIR / "config/bin_frame_01.json")
     parser.add_argument("--bin-depth-mm", type=float, default=150.0, help="림→바닥 깊이 (bin frame용)")
     parser.add_argument("--top-band-mm", type=float, default=50.0, help="최상층 상대 밴드 두께")
     parser.add_argument("--floor-margin-mm", type=float, default=None,
