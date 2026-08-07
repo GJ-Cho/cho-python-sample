@@ -32,8 +32,9 @@ def load_zdf(path: str | Path) -> "SceneData":
     rgb = np.ascontiguousarray(point_cloud.copy_data("rgba_srgb")[:, :, :3])
     xyz = point_cloud.copy_data("xyz")  # (H,W,3) float, mm, NaN
     snr = point_cloud.copy_data("snr")  # (H,W) float
+    normals = point_cloud.copy_data("normals")  # (H,W,3) float, [-1,1], NaN
 
-    return SceneData(rgb=rgb, xyz=xyz, snr=snr)
+    return SceneData(rgb=rgb, xyz=xyz, snr=snr, normals=normals)
 
 
 def save_npz(scene: "SceneData", path: str | Path) -> Path:
@@ -43,6 +44,8 @@ def save_npz(scene: "SceneData", path: str | Path) -> Path:
     arrays = {"rgb": scene.rgb, "xyz": scene.xyz}
     if scene.snr is not None:
         arrays["snr"] = scene.snr
+    if scene.normals is not None:
+        arrays["normals"] = scene.normals
     np.savez_compressed(path, **arrays)
     return path
 
@@ -53,7 +56,8 @@ def load_npz(path: str | Path) -> "SceneData":
 
     data = np.load(Path(path))
     snr = data["snr"] if "snr" in data.files else None
-    return SceneData(rgb=data["rgb"], xyz=data["xyz"], snr=snr)
+    normals = data["normals"] if "normals" in data.files else None
+    return SceneData(rgb=data["rgb"], xyz=data["xyz"], snr=snr, normals=normals)
 
 
 def load(path: str | Path) -> "SceneData":

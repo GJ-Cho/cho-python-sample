@@ -88,6 +88,20 @@ def draw_candidates_2d(rgb: np.ndarray, candidates, radius: int = 6) -> np.ndarr
     return out
 
 
+def normals_to_rgb(normals: np.ndarray) -> np.ndarray:
+    """픽셀당 법선(H,W,3, [-1,1], NaN=무효)을 노말맵 시각화 이미지로 인코딩한다.
+
+    `zivid-python-samples`의 convert_zdf_file_dir.py `_create_normal_map`과 동일한
+    그래픽스 표준 탄젠트공간 인코딩(채널당 0.5*(1-n)*255). 무효 픽셀은 검게 칠한다.
+    RGB 순서로 반환한다(그 샘플은 cv2 저장용으로 BGR 변환을 추가로 함).
+    """
+    invalid = np.isnan(normals).any(axis=2)
+    safe = np.where(np.isnan(normals), 0.0, normals)
+    img = np.clip(0.5 * (1.0 - safe) * 255.0, 0, 255).astype(np.uint8)
+    img[invalid] = 0
+    return img
+
+
 def scene_to_o3d_pointcloud(scene, snr_min: float | None = None):
     """SceneData → open3d PointCloud. NaN 및 (옵션) 저 SNR 포인트는 제외한다."""
     import open3d as o3d

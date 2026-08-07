@@ -59,4 +59,4 @@ geometry:
     max_plane_rms_all_mm: null
     min_inlier_ratio: null
     max_depth_span_mm: null
-    max_tilt_deg: null
+    max_tilt_deg: 70           # m1과 동일 근거(2026-08-06 벽 오검출 실측, 69.5~81.6 간격의 70 채택)

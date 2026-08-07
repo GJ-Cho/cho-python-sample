@@ -21,11 +21,14 @@ class SceneData:
         rgb: (H, W, 3) uint8. copy_data("rgba_srgb")[:, :, :3] 로 생성.
         xyz: (H, W, 3) float32. 단위 mm, 무효값은 NaN. copy_data("xyz").
         snr: (H, W) float32 또는 None. 신뢰도 필터용. copy_data("snr").
+        normals: (H, W, 3) float32 또는 None. 픽셀당 단위 법선, [-1,1], 무효값 NaN.
+            copy_data("normals"). 노말맵 실험(scripts/run_normal_experiment.py)에서만 쓴다.
     """
 
     rgb: np.ndarray
     xyz: np.ndarray
     snr: np.ndarray | None = None
+    normals: np.ndarray | None = None
 
     @property
     def height(self) -> int:
