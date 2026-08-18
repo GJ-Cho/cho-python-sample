@@ -1,0 +1,13 @@
+# data/ 전체를 커밋하지 않는다.
+#   input/  캡처 원본. .zdf 1장이 약 86MB
+#   output/ 실행 시 재생성되는 산출물(오버레이 PNG, 리포트 JSON)
+# 둘 다 리포에 있을 이유가 없다. 데이터 배치 방법은 README.md "데이터 준비" 참조.
+#
+# 이 폴더 아래 data/에는 추적해야 할 파일이 없으므로 예외를 두지 않는다.
+# (리포 다른 곳의 modules/zividsamples/data/ 처럼 소스에 속하는 data/가 있는 경우와 다르다.
+#  그래서 이 규칙은 루트가 아니라 이 폴더에만 둔다.)
+data/
+
+# build_bin_frame가 자동 생성하는 bin frame 캐시 (bin_roi_*.json 티칭 결과로부터 재계산).
+# RANSAC(난수) 산출물이라 재생성하면 높이 기준이 미세하게 바뀐다 — AGENTS.md "측정·비교 규칙" 참조.
+config/bin_frame*.json
