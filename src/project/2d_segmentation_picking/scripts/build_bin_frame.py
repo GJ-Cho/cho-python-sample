@@ -44,6 +44,9 @@ def main() -> None:
     parser.add_argument("--interior-shrink-mm", type=float, default=0.0,
                         help="빈 내부 ROI를 림에서 더 안쪽으로 수축(사면 벽 제외용, 예: 60)")
     parser.add_argument("--snr-min", type=float, default=None)
+    parser.add_argument("--fit-source", choices=["rim", "floor"], default="rim",
+                        help="rim: 림 밴드로 평면 피팅(기본). floor: 빈 내부 바닥 전체로 피팅"
+                             "(빈이 비어 있는 캘리브레이션 장면 전용 — 표본이 커서 코너 오차에 덜 민감)")
     args = parser.parse_args()
 
     import matplotlib.image as mpimg
@@ -62,9 +65,14 @@ def main() -> None:
 
     scene = load_any(args.input)
 
-    # 1) 림 밴드 → bin frame
+    # 1) 림 밴드 → bin frame (또는 --fit-source floor: 빈 내부 바닥 전체로 피팅)
     rim_mask = roi_mod.rim_annulus_mask(scene, corners_rc, rim_band_mm)
-    bf = bf_mod.fit_bin_frame(scene, rim_mask, args.bin_depth_mm)
+    if args.fit_source == "floor":
+        floor_mask = roi_mod.bin_interior_mask(scene, corners_rc, rim_band_mm,
+                                                shrink_mm=args.interior_shrink_mm)
+        bf = bf_mod.fit_bin_frame_from_floor(scene, floor_mask)
+    else:
+        bf = bf_mod.fit_bin_frame(scene, rim_mask, args.bin_depth_mm)
     bf_mod.save_bin_frame(bf, args.config_frame)
 
     # 2) 최상층 마스크 (빈 내부로 한정 — 림 안쪽을 그대로 재사용)

@@ -72,6 +72,32 @@ def fit_bin_frame(scene, rim_mask: np.ndarray, bin_depth_mm: float,
     )
 
 
+def fit_bin_frame_from_floor(scene, floor_mask: np.ndarray,
+                             distance_threshold: float = 1.5) -> BinFrame:
+    """빈 내부 바닥 픽셀에 직접 평면을 피팅한다 (림 밴드 대신).
+
+    빈이 비어 있는 캘리브레이션 전용 장면에서만 쓴다. 림은 폭 20mm 안팎의 얇은
+    밴드라 코너가 조금만 틀어져도 안쪽 사면 벽을 살짝 물어 n_up이 틀어지고,
+    그 오차가 멀리 퍼진 평면(빈 전체)에서 크게 벌어진다. 바닥 전체로 피팅하면
+    표본이 훨씬 크고 넓어 코너 오차에 덜 민감하다. 이미 바닥 자체를 피팅하므로
+    bin_depth_mm=0, p_rim=p_floor로 둔다(필드 이름과 의미가 다르지만 재사용).
+    """
+    valid = floor_mask & scene.valid_mask
+    pts = scene.xyz[valid]
+    if len(pts) < 50:
+        raise ValueError(f"바닥 유효 포인트가 너무 적음: {len(pts)}개")
+
+    normal, p_on_plane, rms, inliers = fit_plane_ransac(pts, distance_threshold)
+    if normal[2] > 0:
+        normal = -normal
+    n_up = normal
+
+    return BinFrame(
+        n_up=n_up.tolist(), p_rim=p_on_plane.tolist(), p_floor=p_on_plane.tolist(),
+        bin_depth_mm=0.0, rms_mm=round(rms, 4), n_inliers=int(len(inliers)),
+    )
+
+
 def save_bin_frame(bf: BinFrame, path: str | Path) -> Path:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
