@@ -40,6 +40,10 @@ filter:
 geometry:
   enabled: true
   dedupe_iou: 0.75           # 라벨이 달라도 마스크가 같은 중복 제거(box NMS로는 남는다)
+  dedupe_containment: null   # 2026-08-11 GT 벤치마크: m1과 달리 m2는 이 규칙이 recall을
+                             # 92→86~87로 깎았다(과분할 18→0은 얻지만 순손실). m2는 박스당
+                             # 마스크 1개라 "같은 물체를 여러 조각으로" 패턴이 아니라
+                             # 실제로 겹친 별개 물체를 잘못 지운 것으로 보여 꺼둔다
   erode_px: 3
   max_fit_points: 2000
   inlier_thresh_mm: 1.5

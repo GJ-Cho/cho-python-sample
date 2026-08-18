@@ -228,6 +228,46 @@ def fit_mask_plane(
 
 # ------------------------------------------------------- 중복 제거 / 병합
 
+def contained_ratio(a: np.ndarray, b: np.ndarray,
+                    box_a: tuple | None = None, box_b: tuple | None = None) -> float:
+    """b가 a 안에 얼마나 포함되는가 = 교집합 / b의 면적. 대칭이 아니다."""
+    box_a = box_a if box_a is not None else bbox_of(a)
+    box_b = box_b if box_b is not None else bbox_of(b)
+    if not _boxes_overlap(box_a, box_b):
+        return 0.0
+    r0 = max(box_a[0], box_b[0]); r1 = min(box_a[1], box_b[1])
+    c0 = max(box_a[2], box_b[2]); c1 = min(box_a[3], box_b[3])
+    sa, sb = a[r0:r1 + 1, c0:c1 + 1], b[r0:r1 + 1, c0:c1 + 1]
+    inter = int(np.count_nonzero(sa & sb))
+    return inter / max(int(b.sum()), 1)
+
+
+def dedupe_by_containment(masks: list[np.ndarray], ratio_thresh: float) -> list[int]:
+    """작은 마스크가 더 큰 마스크에 ratio_thresh 이상 포함되면 작은 쪽을 제거한다.
+
+    `dedupe_by_iou`(대칭)는 "물체 전체를 덮은 큰 마스크"와 "그 일부만 덮은 작은
+    마스크" 쌍을 못 잡는다 — 작은 쪽 면적이 겹침 대부분이어도 합집합이 커서
+    IoU가 낮게 나온다. 포함 비율은 비대칭이라 이 부분집합 관계를 직접 잡는다.
+    실측(2026-08-11 진단): 과분할된 물체 거의 전부가 이 패턴이었다 — 크고 올바른
+    마스크는 실제 물체가 완벽히 평평하지 않아 inlier_ratio가 낮고, 작은 하위
+    마스크는 오히려 평평해서 inlier_ratio가 높다. 그래서 평면성 기준(min_inlier_ratio
+    등)으로는 못 걸러내고, 오히려 올바른 큰 마스크를 걷어내는 역효과가 난다.
+    """
+    boxes = [bbox_of(m) for m in masks]
+    areas = [int(m.sum()) for m in masks]
+    order = sorted(range(len(masks)), key=lambda i: areas[i], reverse=True)  # 큰 것부터
+    removed: set[int] = set()
+    for bi, i in enumerate(order):
+        if i in removed:
+            continue
+        for j in order[bi + 1:]:
+            if j in removed:
+                continue
+            if contained_ratio(masks[i], masks[j], boxes[i], boxes[j]) >= ratio_thresh:
+                removed.add(j)
+    return [i for i in range(len(masks)) if i not in removed]
+
+
 def dedupe_by_iou(masks: list[np.ndarray], scores: list[float], iou_thresh: float) -> list[int]:
     """마스크 IoU 기준 중복 제거. 점수 높은 쪽을 남기고 남길 인덱스를 반환한다.
 
@@ -326,8 +366,8 @@ def refine_masks(scene, segs, scores, metas, n_up, cfg: dict):
         `cfg["enabled"]`가 false면 입력을 그대로 통과시킨다(순수 RGB 결과 비교용).
     """
     stats = {"n_masks_dedup": len(segs), "n_groups_merged": 0, "n_masks_merged": len(segs),
-             "rejected": {"dup": 0, "plane_fit": 0, "plane_rms": 0, "inlier_ratio": 0,
-                          "depth_span": 0, "tilt": 0}}
+             "rejected": {"dup": 0, "dup_contained": 0, "plane_fit": 0, "plane_rms": 0,
+                          "inlier_ratio": 0, "depth_span": 0, "tilt": 0}}
     if not cfg.get("enabled", False) or not segs:
         return segs, metas, [None] * len(segs), stats
 
@@ -343,6 +383,16 @@ def refine_masks(scene, segs, scores, metas, n_up, cfg: dict):
         rej["dup"] = len(segs) - len(keep)
         segs = [segs[i] for i in keep]
         metas = [metas[i] for i in keep]
+        scores = [scores[i] for i in keep]
+
+    # (1.5) 포함 관계 중복 제거 — "물체 전체 마스크" vs "그 일부만 덮은 마스크" 쌍
+    containment_thresh = cfg.get("dedupe_containment")
+    if containment_thresh is not None and len(segs) > 1:
+        keep = sorted(dedupe_by_containment(segs, float(containment_thresh)))
+        rej["dup_contained"] = len(segs) - len(keep)
+        segs = [segs[i] for i in keep]
+        metas = [metas[i] for i in keep]
+        scores = [scores[i] for i in keep]
     stats["n_masks_dedup"] = len(segs)
 
     # (2) 마스크별 평면 피팅 (경계 상자는 1회만 계산해 재사용)

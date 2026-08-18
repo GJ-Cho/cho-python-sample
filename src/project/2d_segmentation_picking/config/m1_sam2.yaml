@@ -44,6 +44,9 @@ geometry:
   dedupe_iou: 0.75             # 마스크 IoU가 이 값 초과인 중복 쌍은 점수 높은 쪽만 남긴다.
                                # AMG의 NMS는 box 기준이라 multimask_output=true에서
                                # 마스크 수준 중복이 남는다. null이면 끔
+  dedupe_containment: 0.9      # 작은 마스크가 큰 마스크에 이 비율 이상 포함되면 제거.
+                               # IoU(대칭)는 "물체 전체" vs "그 일부만" 쌍을 못 잡는다
+                               # (2026-08-11 GT 진단: 과분할의 거의 전부가 이 패턴)
   erode_px: 3                  # 평면 피팅 전 침식 — 마스크 경계는 물체/배경 depth가 섞인다
   max_fit_points: 2000         # 마스크당 피팅 포인트 상한(균일 스트라이드) — 시간 상한 고정
   inlier_thresh_mm: 1.5        # 이 거리 이내를 인라이어로 본다(트리밍 PCA)
