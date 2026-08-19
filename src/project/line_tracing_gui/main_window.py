@@ -8,7 +8,8 @@ automatically (see zividsamples.gui.qt_application).
 """
 
 import zivid
-from PyQt5.QtWidgets import QMainWindow, QTabWidget, QVBoxLayout, QWidget
+from PyQt5.QtCore import Qt
+from PyQt5.QtWidgets import QMainWindow, QSplitter, QTabWidget, QVBoxLayout, QWidget
 
 from line_tracing_gui.widgets.calibration_panel import CalibrationPanel
 from line_tracing_gui.widgets.camera_panel import CameraPanel
@@ -37,14 +38,20 @@ class LineTracingMainWindow(QMainWindow):
         self.resize(1500, 840)  # ~1.5x wider, ~1.2x taller than the previous 1000x700
 
     def _build_connect_tab(self) -> QWidget:
+        """Camera on the left (connect + live 2D), robot on the right (connect, status,
+        TCP offset), both visible at once - the same split the Line Tracing tab uses."""
+        self.camera_panel = CameraPanel(self.zivid_app)
+        self.robot_connection_widget = RobotConnectionWidget()
+
+        splitter = QSplitter(Qt.Horizontal)
+        splitter.addWidget(self.camera_panel)
+        splitter.addWidget(self.robot_connection_widget)
+        # The live 2D preview needs the width more than the robot's forms do.
+        splitter.setStretchFactor(0, 3)
+        splitter.setStretchFactor(1, 2)
+
         tab = QWidget()
         layout = QVBoxLayout()
-
-        self.camera_panel = CameraPanel(self.zivid_app)
-        layout.addWidget(self.camera_panel)
-
-        self.robot_connection_widget = RobotConnectionWidget()
-        layout.addWidget(self.robot_connection_widget)
-
+        layout.addWidget(splitter)
         tab.setLayout(layout)
         return tab

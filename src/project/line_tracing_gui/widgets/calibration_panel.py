@@ -45,7 +45,7 @@ class CalibrationPanel(QWidget):
         self.eye_in_hand = self.config.eye_in_hand()
 
         self.eye_to_hand_radio = QRadioButton("Eye-To-Hand (camera stationary)")
-        self.eye_in_hand_radio = QRadioButton("Eye-In-Hand (camera on gripper)")
+        self.eye_in_hand_radio = QRadioButton("Eye-In-Hand (camera on flange)")
         self.mount_button_group = QButtonGroup(self)
         self.mount_button_group.addButton(self.eye_to_hand_radio)
         self.mount_button_group.addButton(self.eye_in_hand_radio)

@@ -40,6 +40,7 @@ from line_tracing_gui.theme import (
     STATUS_DANGER_STYLE,
     STATUS_OK_STYLE,
     STATUS_WARNING_STYLE,
+    style_spin_box,
 )
 
 POSE_POLL_INTERVAL_MS = 300
@@ -87,6 +88,9 @@ class RobotConnectionWidget(QWidget):
         layout = QVBoxLayout()
         layout.addWidget(group_box)
         layout.addWidget(self._build_tcp_offset_panel())
+        # Keeps both sections top-aligned now that this widget sits in a tall column
+        # of its own on the Connect tab, rather than stacked under the camera panel.
+        layout.addStretch(1)
         self.setLayout(layout)
 
         self.connect_button.clicked.connect(self.on_connect_clicked)
@@ -105,6 +109,7 @@ class RobotConnectionWidget(QWidget):
             spinbox.setRange(-1000.0, 1000.0)
             spinbox.setSuffix(" mm")
             spinbox.setMaximumWidth(100)
+            style_spin_box(spinbox)
 
         self.tcp_rx_spinbox = QDoubleSpinBox()
         self.tcp_ry_spinbox = QDoubleSpinBox()
@@ -113,6 +118,7 @@ class RobotConnectionWidget(QWidget):
             spinbox.setRange(-180.0, 180.0)
             spinbox.setSuffix(" deg")
             spinbox.setMaximumWidth(100)
+            style_spin_box(spinbox)
 
         self.load_tcp_button = QPushButton("Load")
         self.load_tcp_button.clicked.connect(self.on_load_tcp_clicked)
