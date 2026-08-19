@@ -10,7 +10,7 @@ them together and handles Zivid camera connect/disconnect.
 from typing import Optional
 
 import zivid
-from PyQt5.QtCore import pyqtSignal
+from PyQt5.QtCore import QTimer, pyqtSignal
 from PyQt5.QtWidgets import QGroupBox, QVBoxLayout, QWidget
 from zividsamples.gui.widgets.camera_buttons_widget import CameraButtonsWidget
 from zividsamples.gui.widgets.live_2d_widget import Live2DWidget
@@ -26,6 +26,17 @@ class CameraPanel(QWidget):
         self.camera: Optional[zivid.Camera] = None
 
         self.buttons = CameraButtonsWidget(capture_button_text="Start Live Preview")
+        # CameraButtonsWidget wraps its buttons in a QGroupBox("Camera") of its own, which
+        # under this app's theme would draw a second, redundant section header and rule
+        # inside the one below. Flatten it (see theme.py for the section styling).
+        for nested_group_box in self.buttons.findChildren(QGroupBox):
+            nested_group_box.setTitle("")
+            nested_group_box.setStyleSheet("QGroupBox { border: none; margin-top: 0px; padding-top: 0px; }")
+
+        # Same reason as the stretches added to this app's own button rows: without it
+        # CameraButtonsWidget's two buttons split the full window width between them.
+        self.buttons.buttons_layout.addStretch(1)
+
         self.live_2d_widget = Live2DWidget()
         self.live_2d_widget.setMinimumHeight(300)
         self.live_2d_widget.camera_disconnected.connect(self.on_camera_disconnected)
@@ -73,8 +84,8 @@ class CameraPanel(QWidget):
 
     def update_capture_button_state(self) -> None:
         is_live = self.live_2d_widget.is_active()
+        # The theme styles :checked as the active state, so no inline color is needed here.
         self.buttons.capture_button.setChecked(is_live)
-        self.buttons.capture_button.setStyleSheet("background-color: green;" if is_live else "")
         self.buttons.capture_button.setText("Stop Live Preview" if is_live else "Start Live Preview")
 
     def on_toggle_live_clicked(self) -> None:
@@ -82,7 +93,10 @@ class CameraPanel(QWidget):
             self.stop_live_preview()
         else:
             self.start_live_preview()
-        self.update_capture_button_state()
+        # Deferred, not called directly: this runs from CameraButtonsWidget's own click
+        # handler, which resets the button to unchecked right after emitting the signal.
+        # Updating on the next event loop pass is what makes the live state stick.
+        QTimer.singleShot(0, self.update_capture_button_state)
 
     def on_connect_button_clicked(self) -> None:
         if self.camera is not None and self.camera.state.connected:

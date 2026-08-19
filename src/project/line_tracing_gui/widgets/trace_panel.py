@@ -41,6 +41,7 @@ from zividsamples.transformation_matrix import TransformationMatrix
 from line_tracing_gui.config import AppConfig
 from line_tracing_gui.geometry.waypoint_builder import DEFAULT_SAMPLE_SPACING_MM, build_waypoints
 from line_tracing_gui.robot.robot_control_ur_rtde import DEFAULT_JOINT_ACCELERATION, DEFAULT_JOINT_SPEED
+from line_tracing_gui.theme import mark_as_accent, mark_as_danger
 from line_tracing_gui.widgets.calibration_panel import CalibrationPanel
 from line_tracing_gui.widgets.camera_panel import CameraPanel
 from line_tracing_gui.widgets.drawable_image_viewer import DrawableImageViewer
@@ -113,6 +114,7 @@ class TracePanel(QWidget):
 
     def _build_2d_panel(self) -> QWidget:
         self.capture_button = QPushButton("Capture (2D+3D)")
+        mark_as_accent(self.capture_button)
         self.capture_button.clicked.connect(self.on_capture_clicked)
 
         self.draw_mode_button = QPushButton("Draw Line")
@@ -138,6 +140,7 @@ class TracePanel(QWidget):
         buttons_layout.addWidget(self.draw_mode_button)
         buttons_layout.addWidget(self.clear_button)
         buttons_layout.addWidget(self.undo_button)
+        buttons_layout.addStretch(1)  # buttons keep their natural width instead of filling the row
 
         group_box = QGroupBox("2D Capture / Draw Line")
         group_layout = QVBoxLayout()
@@ -152,12 +155,14 @@ class TracePanel(QWidget):
         self.spacing_spinbox.setRange(SPACING_MIN_MM, SPACING_MAX_MM)
         self.spacing_spinbox.setValue(DEFAULT_SAMPLE_SPACING_MM)
         self.spacing_spinbox.setSuffix(" mm")
+        self.spacing_spinbox.setMaximumWidth(110)  # matches the execution panel's spin boxes
         self.spacing_spinbox.setToolTip(
             "Target spacing between waypoints (approximated in pixel space - the actual mm spacing\n"
             "varies with the distance to the surface)"
         )
 
         self.generate_waypoints_button = QPushButton("Generate Waypoints")
+        mark_as_accent(self.generate_waypoints_button)
         self.generate_waypoints_button.setEnabled(False)
         self.generate_waypoints_button.clicked.connect(self.on_generate_waypoints_clicked)
 
@@ -170,6 +175,7 @@ class TracePanel(QWidget):
         spacing_row = QHBoxLayout()
         spacing_row.addWidget(self.spacing_spinbox)
         spacing_row.addWidget(self.generate_waypoints_button)
+        spacing_row.addStretch(1)
         controls_form.addRow("Waypoint Spacing", spacing_row)
 
         group_box = QGroupBox("3D Point Cloud / Waypoints (yellow dot = current robot position)")
@@ -221,10 +227,14 @@ class TracePanel(QWidget):
         )
 
         self.execute_button = QPushButton("Execute")
+        mark_as_accent(self.execute_button)
         self.execute_button.setEnabled(False)
         self.execute_button.clicked.connect(self.on_execute_clicked)
 
         self.stop_button = QPushButton("Stop")
+        mark_as_danger(self.stop_button)
+        for button in (self.execute_button, self.stop_button):
+            button.setMinimumWidth(150)  # wide enough to read as the panel's main action
         self.stop_button.setEnabled(False)
         self.stop_button.clicked.connect(self.on_stop_clicked)
 
@@ -260,7 +270,9 @@ class TracePanel(QWidget):
 
         form_and_buttons_row = QHBoxLayout()
         form_and_buttons_row.addLayout(form, 0)
-        form_and_buttons_row.addLayout(buttons_column, 1)
+        form_and_buttons_row.addSpacing(40)
+        form_and_buttons_row.addLayout(buttons_column, 0)
+        form_and_buttons_row.addStretch(1)
 
         group_box = QGroupBox("Robot Execution")
         group_layout = QVBoxLayout()

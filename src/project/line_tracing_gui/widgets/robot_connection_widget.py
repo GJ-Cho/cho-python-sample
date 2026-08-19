@@ -35,6 +35,12 @@ from zividsamples.transformation_matrix import TransformationMatrix
 
 from line_tracing_gui.config import AppConfig
 from line_tracing_gui.robot.robot_control_ur_rtde import RobotControlURRTDE
+from line_tracing_gui.theme import (
+    BUSY_BUTTON_STYLE,
+    STATUS_DANGER_STYLE,
+    STATUS_OK_STYLE,
+    STATUS_WARNING_STYLE,
+)
 
 POSE_POLL_INTERVAL_MS = 300
 TEST_MOVE_OFFSET_MM = 10.0
@@ -72,6 +78,7 @@ class RobotConnectionWidget(QWidget):
         buttons_layout.addWidget(self.connect_button)
         buttons_layout.addWidget(self.reconnect_button)
         buttons_layout.addWidget(self.test_move_button)
+        buttons_layout.addStretch(1)  # buttons keep their natural width instead of filling the row
         group_layout.addLayout(buttons_layout)
         group_layout.addWidget(self.status_label)
         group_layout.addWidget(self.pose_label)
@@ -125,6 +132,7 @@ class RobotConnectionWidget(QWidget):
         buttons_row = QHBoxLayout()
         buttons_row.addWidget(self.load_tcp_button)
         buttons_row.addWidget(self.apply_tcp_button)
+        buttons_row.addStretch(1)
 
         form = QFormLayout()
         form.addRow("Position (X, Y, Z)", translation_row)
@@ -187,7 +195,7 @@ class RobotConnectionWidget(QWidget):
             return
         ip_addr = self.ip_input.text().strip()
         self.connect_button.setChecked(True)
-        self.connect_button.setStyleSheet("background-color: yellow;")
+        self.connect_button.setStyleSheet(BUSY_BUTTON_STYLE)
         self.connect_button.setText("Connecting...")
         QApplication.processEvents()
         try:
@@ -195,7 +203,9 @@ class RobotConnectionWidget(QWidget):
             self.robot_control.connect()
             self.config.set_robot_ip(ip_addr)
             self.connected = True
-            self.connect_button.setStyleSheet("background-color: green;")
+            # Connected: the button stays checked, which the theme styles as the active
+            # state - clear the transient busy color so that rule applies again.
+            self.connect_button.setStyleSheet("")
             self.connect_button.setText("Disconnect")
             self.test_move_button.setEnabled(True)
             self.on_load_tcp_clicked()
@@ -266,13 +276,13 @@ class RobotConnectionWidget(QWidget):
         assert self.robot_control is not None
         if self.robot_control.is_emergency_stopped():
             self.status_label.setText("⚠ Emergency stop - clear on the pendant, then press 'Reconnect'")
-            self.status_label.setStyleSheet("background-color: #a32d2d; color: white;")
+            self.status_label.setStyleSheet(STATUS_DANGER_STYLE)
         elif self.robot_control.is_protective_stopped():
             self.status_label.setText("⚠ Protective stop - clear on the pendant, then press 'Reconnect'")
-            self.status_label.setStyleSheet("background-color: #854f0b; color: white;")
+            self.status_label.setStyleSheet(STATUS_WARNING_STYLE)
         else:
             self.status_label.setText("Normal (ready to move)")
-            self.status_label.setStyleSheet("background-color: #3b6d11; color: white;")
+            self.status_label.setStyleSheet(STATUS_OK_STYLE)
 
     def _run_test_move(self) -> None:
         assert self.robot_control is not None
@@ -304,7 +314,7 @@ class RobotConnectionWidget(QWidget):
         if self.robot_control is None:
             return
         self.test_move_button.setEnabled(False)
-        self.test_move_button.setStyleSheet("background-color: yellow;")
+        self.test_move_button.setStyleSheet(BUSY_BUTTON_STYLE)
         QApplication.processEvents()
         # The pose-poll timer and the move thread would otherwise call send()/receive()
         # on the same RTDE socket from two threads at once - pause polling for the move.

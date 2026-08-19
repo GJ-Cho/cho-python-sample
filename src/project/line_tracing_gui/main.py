@@ -23,10 +23,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from zividsamples.gui.qt_application import ZividQtApplication
 
 from line_tracing_gui.main_window import LineTracingMainWindow
+from line_tracing_gui.theme import apply_theme
 
 
 def _main() -> None:
     with ZividQtApplication() as qt_app:
+        # Must run before any widget is built, so the first polish already sees the
+        # accent/danger properties the widgets set on their buttons (see theme.py).
+        apply_theme(qt_app)
         sys.exit(qt_app.run(LineTracingMainWindow(qt_app.zivid_app), "Line Tracing GUI"))
 
 

@@ -32,6 +32,9 @@ UR3e(뾰족한 그리퍼) + Zivid2+ MR130(eye-to-hand, 고정 거치)로, 캡처
   바뀌면 이 로직 전체를 재검토해야 한다.
 - 하드코딩 금지. 속도/가속도/블렌드/간격 등은 GUI 입력값이나 상수로 명시하고, `config.py`(QSettings)로
   영속화가 필요한 값만 저장한다.
+- 색·폰트·여백은 `theme.py`에만 둔다. 위젯 코드에 `"green"` 같은 raw 색을 쓰지 말고 `theme.py`의 상수를
+  import한다. 그리고 `zividsamples`(설치된 site-packages 패키지)의 스타일시트는 절대 수정하지 않는다 —
+  다른 샘플 GUI가 공유하는 코드다. `theme.py`가 그 뒤에 QSS를 덧붙여 덮어쓴다.
 - 주석과 문서(`PLAN.md`, `README.md`, 이 파일)는 한국어, 코드 식별자와 API 이름은 영어.
 - **GUI에 표시되는 문자열은 영어**로 쓴다 — 버튼/라벨/탭 제목/툴팁/`QMessageBox`/상태 메시지 전부. 사내 데모
   및 리포 공개용이고, `zividsamples` 위젯이 자체적으로 제공하는 라벨(`Connect`, `Capture` 등)과 섞이면
