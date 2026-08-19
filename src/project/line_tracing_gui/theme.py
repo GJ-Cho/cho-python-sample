@@ -27,20 +27,23 @@ What it changes, and why (the base sheet is otherwise unmodified):
 - QDoubleSpinBox / QScrollBar / QRadioButton / QToolTip / QSplitter. The base
   sheet has no rules for these, so they fall back to the platform style and
   clash with the dark palette. This app leans on spin boxes especially (eleven of
-  them), which the other zividsamples GUIs barely use.
+  them), which the other zividsamples GUIs barely use. Their built-in up/down
+  buttons cannot be styled at all - widgets.spin_box_stepper.SpinBoxStepper
+  replaces them with real buttons, styled here via STEPPER_PROPERTY.
 
 Colors follow Zivid's brand cyan (#03B9EB, as used in Zivid Studio) for accents;
 the grays are a slightly darker take on the base sheet's palette.
 
 """
 
-from PyQt5.QtWidgets import QAbstractSpinBox, QApplication, QPushButton
+from PyQt5.QtWidgets import QApplication, QPushButton
 
 # Set as a Qt dynamic property to opt a button into the accent/danger styling,
 # e.g. button.setProperty(ACCENT_PROPERTY, True). Assign before the button is
 # first shown so the initial polish picks it up.
 ACCENT_PROPERTY = "accent"
 DANGER_PROPERTY = "danger"
+STEPPER_PROPERTY = "stepper"
 
 SURFACE = "#2b2b2b"
 SURFACE_RAISED = "#383838"
@@ -167,6 +170,16 @@ QPushButton[{DANGER_PROPERTY}="true"]:disabled {{
     border-color: {BORDER_SUBTLE};
     color: {TEXT_MUTED};
     font-weight: normal;
+}}
+
+QPushButton[{STEPPER_PROPERTY}="true"] {{
+    padding: 0px;
+    font-size: 12pt;
+    color: {TEXT_MUTED};
+}}
+QPushButton[{STEPPER_PROPERTY}="true"]:hover {{
+    color: {ACCENT};
+    border-color: {ACCENT};
 }}
 
 QLineEdit {{
@@ -349,18 +362,6 @@ QToolTip {{
 def apply_theme(app: QApplication) -> None:
     """Append this app's QSS to whatever ZividQtApplication already installed."""
     app.setStyleSheet(app.styleSheet() + LINE_TRACING_STYLE)
-
-
-def style_spin_box(spin_box: QAbstractSpinBox) -> None:
-    """Swap the platform up/down arrows for +/- symbols.
-
-    Styling ::up-button / ::down-button is not an option: as soon as a spin box
-    sub-control is given any rule, Qt stops drawing its built-in arrow and expects an
-    image file instead, and the CSS border-triangle trick renders as a plain square.
-    On Windows the native arrows are a cramped raised sub-button that reads as a
-    rendering glitch against this dark palette, so use the symbols Qt draws as text.
-    """
-    spin_box.setButtonSymbols(QAbstractSpinBox.PlusMinus)
 
 
 def mark_as_accent(button: QPushButton) -> None:

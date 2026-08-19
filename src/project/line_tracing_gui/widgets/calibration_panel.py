@@ -86,6 +86,7 @@ class CalibrationPanel(QWidget):
         group_layout.addLayout(form_layout)
         group_layout.addWidget(self.eye_in_hand_note)
         group_layout.addWidget(self.hand_eye_pose_widget)
+        group_layout.addStretch(1)  # keeps the rows packed at the top rather than spread out
         group_box.setLayout(group_layout)
 
         layout = QVBoxLayout()

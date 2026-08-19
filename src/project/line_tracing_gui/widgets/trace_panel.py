@@ -41,12 +41,13 @@ from zividsamples.transformation_matrix import TransformationMatrix
 from line_tracing_gui.config import AppConfig
 from line_tracing_gui.geometry.waypoint_builder import DEFAULT_SAMPLE_SPACING_MM, build_waypoints
 from line_tracing_gui.robot.robot_control_ur_rtde import DEFAULT_JOINT_ACCELERATION, DEFAULT_JOINT_SPEED
-from line_tracing_gui.theme import mark_as_accent, mark_as_danger, style_spin_box
+from line_tracing_gui.theme import mark_as_accent, mark_as_danger
 from line_tracing_gui.widgets.calibration_panel import CalibrationPanel
 from line_tracing_gui.widgets.camera_panel import CameraPanel
 from line_tracing_gui.widgets.drawable_image_viewer import DrawableImageViewer
 from line_tracing_gui.widgets.pointcloud_viewer_widget import PointCloudViewerWidget
 from line_tracing_gui.widgets.robot_connection_widget import RobotConnectionWidget
+from line_tracing_gui.widgets.spin_box_stepper import SpinBoxStepper
 
 SPACING_MIN_MM = 1.0
 SPACING_MAX_MM = 50.0
@@ -155,8 +156,6 @@ class TracePanel(QWidget):
         self.spacing_spinbox.setRange(SPACING_MIN_MM, SPACING_MAX_MM)
         self.spacing_spinbox.setValue(DEFAULT_SAMPLE_SPACING_MM)
         self.spacing_spinbox.setSuffix(" mm")
-        self.spacing_spinbox.setMaximumWidth(110)  # matches the execution panel's spin boxes
-        style_spin_box(self.spacing_spinbox)
         self.spacing_spinbox.setToolTip(
             "Target spacing between waypoints (approximated in pixel space - the actual mm spacing\n"
             "varies with the distance to the surface)"
@@ -174,7 +173,7 @@ class TracePanel(QWidget):
 
         controls_form = QFormLayout()
         spacing_row = QHBoxLayout()
-        spacing_row.addWidget(self.spacing_spinbox)
+        spacing_row.addWidget(SpinBoxStepper(self.spacing_spinbox))
         spacing_row.addWidget(self.generate_waypoints_button)
         spacing_row.addStretch(1)
         controls_form.addRow("Waypoint Spacing", spacing_row)
@@ -222,8 +221,6 @@ class TracePanel(QWidget):
         self.blend_spinbox.setRange(EXEC_BLEND_MIN_MM, EXEC_BLEND_MAX_MM)
         self.blend_spinbox.setValue(EXEC_BLEND_DEFAULT_MM)
         self.blend_spinbox.setSuffix(" mm")
-        for spinbox in (self.approach_spinbox, self.speed_spinbox, self.acceleration_spinbox, self.blend_spinbox):
-            style_spin_box(spinbox)
         self.blend_spinbox.setToolTip(
             "Execution is refused if this exceeds half the spacing between adjacent waypoints -\n"
             "overlapping blend zones make the robot skip intermediate points and speed up abruptly."
@@ -258,10 +255,10 @@ class TracePanel(QWidget):
         form = QFormLayout()
         form.setFieldGrowthPolicy(QFormLayout.FieldsStayAtSizeHint)
         form.addRow("Home / Start Posture", home_row)
-        form.addRow("Approach / Retreat", self.approach_spinbox)
-        form.addRow("Speed", self.speed_spinbox)
-        form.addRow("Acceleration", self.acceleration_spinbox)
-        form.addRow("Blend", self.blend_spinbox)
+        form.addRow("Approach / Retreat", SpinBoxStepper(self.approach_spinbox))
+        form.addRow("Speed", SpinBoxStepper(self.speed_spinbox))
+        form.addRow("Acceleration", SpinBoxStepper(self.acceleration_spinbox))
+        form.addRow("Blend", SpinBoxStepper(self.blend_spinbox))
 
         # Execute/Stop sit to the right of the settings form, in the wide empty space that
         # would otherwise be left blank next to the narrow (FieldsStayAtSizeHint) fields.

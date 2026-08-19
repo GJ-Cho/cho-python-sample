@@ -40,13 +40,14 @@ from line_tracing_gui.theme import (
     STATUS_DANGER_STYLE,
     STATUS_OK_STYLE,
     STATUS_WARNING_STYLE,
-    style_spin_box,
 )
+from line_tracing_gui.widgets.spin_box_stepper import SpinBoxStepper
 
 POSE_POLL_INTERVAL_MS = 300
 TEST_MOVE_OFFSET_MM = 10.0
 TEST_MOVE_VELOCITY = 0.02  # m/s, deliberately slow for a first verification move
 TEST_MOVE_ACCELERATION = 0.1  # m/s^2
+TCP_FIELD_WIDTH_PX = 76
 
 
 class RobotConnectionWidget(QWidget):
@@ -108,8 +109,6 @@ class RobotConnectionWidget(QWidget):
         for spinbox in (self.tcp_x_spinbox, self.tcp_y_spinbox, self.tcp_z_spinbox):
             spinbox.setRange(-1000.0, 1000.0)
             spinbox.setSuffix(" mm")
-            spinbox.setMaximumWidth(100)
-            style_spin_box(spinbox)
 
         self.tcp_rx_spinbox = QDoubleSpinBox()
         self.tcp_ry_spinbox = QDoubleSpinBox()
@@ -117,23 +116,23 @@ class RobotConnectionWidget(QWidget):
         for spinbox in (self.tcp_rx_spinbox, self.tcp_ry_spinbox, self.tcp_rz_spinbox):
             spinbox.setRange(-180.0, 180.0)
             spinbox.setSuffix(" deg")
-            spinbox.setMaximumWidth(100)
-            style_spin_box(spinbox)
 
         self.load_tcp_button = QPushButton("Load")
         self.load_tcp_button.clicked.connect(self.on_load_tcp_clicked)
         self.apply_tcp_button = QPushButton("Apply")
         self.apply_tcp_button.clicked.connect(self.on_apply_tcp_clicked)
 
+        # Narrower fields than the default: three steppers have to fit side by side in
+        # the Connect tab's right-hand column.
         translation_row = QHBoxLayout()
-        translation_row.addWidget(self.tcp_x_spinbox)
-        translation_row.addWidget(self.tcp_y_spinbox)
-        translation_row.addWidget(self.tcp_z_spinbox)
+        for spinbox in (self.tcp_x_spinbox, self.tcp_y_spinbox, self.tcp_z_spinbox):
+            translation_row.addWidget(SpinBoxStepper(spinbox, field_width_px=TCP_FIELD_WIDTH_PX))
+        translation_row.addStretch(1)
 
         rotation_row = QHBoxLayout()
-        rotation_row.addWidget(self.tcp_rx_spinbox)
-        rotation_row.addWidget(self.tcp_ry_spinbox)
-        rotation_row.addWidget(self.tcp_rz_spinbox)
+        for spinbox in (self.tcp_rx_spinbox, self.tcp_ry_spinbox, self.tcp_rz_spinbox):
+            rotation_row.addWidget(SpinBoxStepper(spinbox, field_width_px=TCP_FIELD_WIDTH_PX))
+        rotation_row.addStretch(1)
 
         buttons_row = QHBoxLayout()
         buttons_row.addWidget(self.load_tcp_button)
