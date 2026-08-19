@@ -25,13 +25,13 @@ class LineTracingMainWindow(QMainWindow):
         self.main_tab_widget.setObjectName("main_tab_widget")
 
         self.connect_tab = self._build_connect_tab()
-        self.main_tab_widget.addTab(self.connect_tab, "연결")
+        self.main_tab_widget.addTab(self.connect_tab, "Connect")
 
         self.calibration_panel = CalibrationPanel()
-        self.main_tab_widget.addTab(self.calibration_panel, "캘리브레이션")
+        self.main_tab_widget.addTab(self.calibration_panel, "Calibration")
 
         self.trace_panel = TracePanel(self.camera_panel, self.calibration_panel, self.robot_connection_widget)
-        self.main_tab_widget.addTab(self.trace_panel, "라인 트레이싱")
+        self.main_tab_widget.addTab(self.trace_panel, "Line Tracing")
 
         self.setCentralWidget(self.main_tab_widget)
         self.resize(1500, 840)  # ~1.5x wider, ~1.2x taller than the previous 1000x700

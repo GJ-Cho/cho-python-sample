@@ -44,8 +44,8 @@ class CalibrationPanel(QWidget):
         self.config = AppConfig()
         self.eye_in_hand = self.config.eye_in_hand()
 
-        self.eye_to_hand_radio = QRadioButton("Eye-to-hand (카메라 고정 거치)")
-        self.eye_in_hand_radio = QRadioButton("Eye-in-hand (카메라가 그리퍼에 장착)")
+        self.eye_to_hand_radio = QRadioButton("Eye-To-Hand (camera stationary)")
+        self.eye_in_hand_radio = QRadioButton("Eye-In-Hand (camera on gripper)")
         self.mount_button_group = QButtonGroup(self)
         self.mount_button_group.addButton(self.eye_to_hand_radio)
         self.mount_button_group.addButton(self.eye_in_hand_radio)
@@ -53,21 +53,21 @@ class CalibrationPanel(QWidget):
         self.eye_to_hand_radio.toggled.connect(self.on_mount_type_toggled)
 
         self.eye_in_hand_note = QLabel(
-            "⚠ eye-in-hand는 캡처 시점의 로봇 pose가 추가로 필요합니다 (라인 트레이싱 탭에서 처리)."
+            "⚠ Eye-In-Hand additionally needs the robot pose at capture time (handled in the Line Tracing tab)."
         )
         self.eye_in_hand_note.setWordWrap(True)
 
         self.path_field = QLineEdit()
         self.path_field.setReadOnly(True)
-        self.path_field.setPlaceholderText("(불러온 파일 없음)")
-        self.load_button = QPushButton("불러오기...")
+        self.path_field.setPlaceholderText("(no file loaded)")
+        self.load_button = QPushButton("Load...")
         self.load_button.clicked.connect(self.on_load_clicked)
 
         self.hand_eye_pose_widget = PoseWidget.HandEye(
             eye_in_hand=self.eye_in_hand, display_mode=PoseWidgetDisplayMode.Basic
         )
 
-        group_box = QGroupBox("캘리브레이션 (Hand-Eye)")
+        group_box = QGroupBox("Hand-Eye Calibration")
         group_layout = QVBoxLayout()
         group_layout.setSpacing(10)
 
@@ -76,7 +76,7 @@ class CalibrationPanel(QWidget):
         mount_row.addWidget(self.eye_to_hand_radio)
         mount_row.addWidget(self.eye_in_hand_radio)
         mount_row.addStretch(1)
-        form_layout.addRow("카메라 마운트", mount_row)
+        form_layout.addRow("Camera Mount", mount_row)
 
         path_row = QHBoxLayout()
         path_row.addWidget(self.path_field, stretch=1)
@@ -124,7 +124,7 @@ class CalibrationPanel(QWidget):
         saved_path = self.config.hand_eye_transform_path()
         start_dir = str(saved_path.parent) if saved_path is not None else str(Path.home())
         file_path, _ = QFileDialog.getOpenFileName(
-            self, "Hand-Eye Transform YAML 선택", start_dir, "YAML files (*.yaml *.yml)"
+            self, "Select Hand-Eye Transform YAML", start_dir, "YAML files (*.yaml *.yml)"
         )
         if not file_path:
             return

@@ -25,12 +25,12 @@ class CameraPanel(QWidget):
         self.zivid_app = zivid_app
         self.camera: Optional[zivid.Camera] = None
 
-        self.buttons = CameraButtonsWidget(capture_button_text="Live 미리보기 시작")
+        self.buttons = CameraButtonsWidget(capture_button_text="Start Live Preview")
         self.live_2d_widget = Live2DWidget()
         self.live_2d_widget.setMinimumHeight(300)
         self.live_2d_widget.camera_disconnected.connect(self.on_camera_disconnected)
 
-        group_box = QGroupBox("카메라 (Zivid2+ MR130)")
+        group_box = QGroupBox("Camera (Zivid 2+ MR130)")
         group_layout = QVBoxLayout()
         group_layout.addWidget(self.buttons)
         group_layout.addWidget(self.live_2d_widget)
@@ -75,7 +75,7 @@ class CameraPanel(QWidget):
         is_live = self.live_2d_widget.is_active()
         self.buttons.capture_button.setChecked(is_live)
         self.buttons.capture_button.setStyleSheet("background-color: green;" if is_live else "")
-        self.buttons.capture_button.setText("Live 미리보기 중지" if is_live else "Live 미리보기 시작")
+        self.buttons.capture_button.setText("Stop Live Preview" if is_live else "Start Live Preview")
 
     def on_toggle_live_clicked(self) -> None:
         if self.live_2d_widget.is_active():

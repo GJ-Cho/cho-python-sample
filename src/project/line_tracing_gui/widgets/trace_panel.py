@@ -112,23 +112,23 @@ class TracePanel(QWidget):
         self._update_home_status_label()
 
     def _build_2d_panel(self) -> QWidget:
-        self.capture_button = QPushButton("캡처 (2D+3D)")
+        self.capture_button = QPushButton("Capture (2D+3D)")
         self.capture_button.clicked.connect(self.on_capture_clicked)
 
-        self.draw_mode_button = QPushButton("라인 그리기")
+        self.draw_mode_button = QPushButton("Draw Line")
         self.draw_mode_button.setCheckable(True)
         self.draw_mode_button.setEnabled(False)
         self.draw_mode_button.toggled.connect(self.on_draw_mode_toggled)
 
-        self.clear_button = QPushButton("지우기")
+        self.clear_button = QPushButton("Clear")
         self.clear_button.setEnabled(False)
         self.clear_button.clicked.connect(self.on_clear_clicked)
 
-        self.undo_button = QPushButton("실행 취소")
+        self.undo_button = QPushButton("Undo")
         self.undo_button.setEnabled(False)
         self.undo_button.clicked.connect(self.on_undo_clicked)
 
-        self.status_label_2d = QLabel("카메라를 연결하고 캡처해주세요.")
+        self.status_label_2d = QLabel("Connect a camera and capture.")
 
         self.image_viewer = DrawableImageViewer()
         self.image_viewer.setMinimumSize(400, 400)
@@ -139,7 +139,7 @@ class TracePanel(QWidget):
         buttons_layout.addWidget(self.clear_button)
         buttons_layout.addWidget(self.undo_button)
 
-        group_box = QGroupBox("2D 캡처 / 라인 그리기")
+        group_box = QGroupBox("2D Capture / Draw Line")
         group_layout = QVBoxLayout()
         group_layout.addLayout(buttons_layout)
         group_layout.addWidget(self.status_label_2d)
@@ -153,14 +153,15 @@ class TracePanel(QWidget):
         self.spacing_spinbox.setValue(DEFAULT_SAMPLE_SPACING_MM)
         self.spacing_spinbox.setSuffix(" mm")
         self.spacing_spinbox.setToolTip(
-            "웨이포인트 사이의 목표 간격 (픽셀 공간에서 근사 - 표면까지 거리에 따라 실제 mm 간격은 달라질 수 있음)"
+            "Target spacing between waypoints (approximated in pixel space - the actual mm spacing\n"
+            "varies with the distance to the surface)"
         )
 
-        self.generate_waypoints_button = QPushButton("웨이포인트 생성")
+        self.generate_waypoints_button = QPushButton("Generate Waypoints")
         self.generate_waypoints_button.setEnabled(False)
         self.generate_waypoints_button.clicked.connect(self.on_generate_waypoints_clicked)
 
-        self.status_label_3d = QLabel("캡처 후 라인을 그리면 여기에 점 구름이 표시됩니다.")
+        self.status_label_3d = QLabel("Capture, then draw a line - the point cloud shows up here.")
 
         self.pointcloud_viewer = PointCloudViewerWidget()
         self.pointcloud_viewer.setMinimumSize(400, 400)
@@ -169,9 +170,9 @@ class TracePanel(QWidget):
         spacing_row = QHBoxLayout()
         spacing_row.addWidget(self.spacing_spinbox)
         spacing_row.addWidget(self.generate_waypoints_button)
-        controls_form.addRow("웨이포인트 간격", spacing_row)
+        controls_form.addRow("Waypoint Spacing", spacing_row)
 
-        group_box = QGroupBox("3D 포인트 클라우드 / 웨이포인트 (노란 점 = 로봇 현재 위치)")
+        group_box = QGroupBox("3D Point Cloud / Waypoints (yellow dot = current robot position)")
         group_layout = QVBoxLayout()
         group_layout.addLayout(controls_form)
         group_layout.addWidget(self.status_label_3d)
@@ -180,9 +181,9 @@ class TracePanel(QWidget):
         return group_box
 
     def _build_execution_panel(self) -> QWidget:
-        self.set_home_button = QPushButton("현재 위치를 홈으로 설정")
+        self.set_home_button = QPushButton("Set Current As Home")
         self.set_home_button.clicked.connect(self.on_set_home_clicked)
-        self.move_home_button = QPushButton("홈으로 이동")
+        self.move_home_button = QPushButton("Move To Home")
         self.move_home_button.clicked.connect(self.on_move_home_clicked)
         self.home_status_label = QLabel("")
 
@@ -191,15 +192,19 @@ class TracePanel(QWidget):
         self.approach_spinbox.setValue(APPROACH_DEFAULT_MM)
         self.approach_spinbox.setSuffix(" mm")
         self.approach_spinbox.setToolTip(
-            "라인의 시작/끝 지점에서 그리퍼가 접근을 시작하고 후퇴를 마치는, 표면에서 떨어진 거리 "
-            "(웨이포인트의 로컬 -Z 방향, 즉 찌르는 방향의 반대쪽)"
+            "Standoff distance from the surface where the gripper starts its approach and ends its\n"
+            "retreat, at the first/last point of the line (along the waypoint's local -Z, i.e. the\n"
+            "direction opposite to where the tip points)"
         )
 
         self.speed_spinbox = QDoubleSpinBox()
         self.speed_spinbox.setRange(EXEC_SPEED_MIN_MM_S, EXEC_SPEED_MAX_MM_S)
         self.speed_spinbox.setValue(EXEC_SPEED_DEFAULT_MM_S)
         self.speed_spinbox.setSuffix(" mm/s")
-        self.speed_spinbox.setToolTip("웨이포인트를 따라가는 구간(move_path)의 속도. 접근/후퇴/홈 이동은 moveJ 기본값을 씀.")
+        self.speed_spinbox.setToolTip(
+            "Speed for the waypoint-following leg (move_path). Approach, retreat and home moves\n"
+            "use the moveJ defaults."
+        )
 
         self.acceleration_spinbox = QDoubleSpinBox()
         self.acceleration_spinbox.setRange(EXEC_ACCELERATION_MIN, EXEC_ACCELERATION_MAX)
@@ -211,15 +216,15 @@ class TracePanel(QWidget):
         self.blend_spinbox.setValue(EXEC_BLEND_DEFAULT_MM)
         self.blend_spinbox.setSuffix(" mm")
         self.blend_spinbox.setToolTip(
-            "인접 웨이포인트 간격의 절반보다 크면 실행이 거부됩니다 - 블렌드 구간이 겹치면 "
-            "로봇이 중간 지점을 건너뛰고 갑자기 빨라지는 문제가 생깁니다."
+            "Execution is refused if this exceeds half the spacing between adjacent waypoints -\n"
+            "overlapping blend zones make the robot skip intermediate points and speed up abruptly."
         )
 
-        self.execute_button = QPushButton("실행")
+        self.execute_button = QPushButton("Execute")
         self.execute_button.setEnabled(False)
         self.execute_button.clicked.connect(self.on_execute_clicked)
 
-        self.stop_button = QPushButton("정지")
+        self.stop_button = QPushButton("Stop")
         self.stop_button.setEnabled(False)
         self.stop_button.clicked.connect(self.on_stop_clicked)
 
@@ -239,11 +244,11 @@ class TracePanel(QWidget):
         # label and its field once the window is wide.
         form = QFormLayout()
         form.setFieldGrowthPolicy(QFormLayout.FieldsStayAtSizeHint)
-        form.addRow("홈/시작 자세", home_row)
-        form.addRow("접근/후퇴", self.approach_spinbox)
-        form.addRow("속도", self.speed_spinbox)
-        form.addRow("가속도", self.acceleration_spinbox)
-        form.addRow("블렌드", self.blend_spinbox)
+        form.addRow("Home / Start Posture", home_row)
+        form.addRow("Approach / Retreat", self.approach_spinbox)
+        form.addRow("Speed", self.speed_spinbox)
+        form.addRow("Acceleration", self.acceleration_spinbox)
+        form.addRow("Blend", self.blend_spinbox)
 
         # Execute/Stop sit to the right of the settings form, in the wide empty space that
         # would otherwise be left blank next to the narrow (FieldsStayAtSizeHint) fields.
@@ -257,7 +262,7 @@ class TracePanel(QWidget):
         form_and_buttons_row.addLayout(form, 0)
         form_and_buttons_row.addLayout(buttons_column, 1)
 
-        group_box = QGroupBox("로봇 실행")
+        group_box = QGroupBox("Robot Execution")
         group_layout = QVBoxLayout()
         group_layout.addLayout(form_and_buttons_row)
         group_layout.addWidget(self.tcp_monitor_label)
@@ -275,7 +280,7 @@ class TracePanel(QWidget):
     def on_capture_clicked(self) -> None:
         camera = self.camera_panel.camera
         if camera is None or not camera.state.connected:
-            QMessageBox.warning(self, "캡처", "먼저 카메라를 연결해주세요.")
+            QMessageBox.warning(self, "Capture", "Connect a camera first.")
             return
 
         self.camera_panel.stop_live_preview()
@@ -287,7 +292,7 @@ class TracePanel(QWidget):
                 self.point_cloud_xyz = point_cloud.copy_data("xyz")
                 rgba = point_cloud.copy_data("rgba_srgb")
         except RuntimeError as ex:
-            QMessageBox.critical(self, "캡처 실패", str(ex))
+            QMessageBox.critical(self, "Capture Failed", str(ex))
             return
 
         self.point_cloud_rgb = rgba
@@ -301,13 +306,13 @@ class TracePanel(QWidget):
         self.clear_button.setEnabled(True)
         self.undo_button.setEnabled(True)
         self.generate_waypoints_button.setEnabled(True)
-        self.status_label_2d.setText(f"캡처 완료 ({rgba.shape[1]}x{rgba.shape[0]}) - 라인을 그려주세요.")
-        self.status_label_3d.setText("점 구름 표시됨 - 라인을 그리고 웨이포인트를 생성해주세요.")
+        self.status_label_2d.setText(f"Captured ({rgba.shape[1]}x{rgba.shape[0]}) - draw a line.")
+        self.status_label_3d.setText("Point cloud shown - draw a line, then generate waypoints.")
         self._update_execute_button_state()
 
     def on_draw_mode_toggled(self, checked: bool) -> None:
         self.image_viewer.set_draw_mode(checked)
-        self.draw_mode_button.setText("그리기 중지" if checked else "라인 그리기")
+        self.draw_mode_button.setText("Stop Drawing" if checked else "Draw Line")
 
     def on_clear_clicked(self) -> None:
         self.image_viewer.clear_line()
@@ -319,11 +324,11 @@ class TracePanel(QWidget):
 
     def on_generate_waypoints_clicked(self) -> None:
         if self.point_cloud_xyz is None:
-            QMessageBox.warning(self, "웨이포인트 생성", "먼저 캡처해주세요.")
+            QMessageBox.warning(self, "Generate Waypoints", "Capture first.")
             return
         line_points_px = self.image_viewer.get_line_points()
         if len(line_points_px) < 2:
-            QMessageBox.warning(self, "웨이포인트 생성", "먼저 라인을 그려주세요.")
+            QMessageBox.warning(self, "Generate Waypoints", "Draw a line first.")
             return
 
         hand_eye_transform = self.calibration_panel.get_hand_eye_transform()
@@ -331,9 +336,9 @@ class TracePanel(QWidget):
         if eye_in_hand:
             QMessageBox.warning(
                 self,
-                "웨이포인트 생성",
-                "Eye-in-hand는 캡처 시점의 로봇 pose 기록이 아직 구현되지 않았습니다. "
-                "캘리브레이션 탭에서 Eye-to-hand를 선택해주세요.",
+                "Generate Waypoints",
+                "Eye-In-Hand is not supported yet - recording the robot pose at capture time is\n"
+                "not implemented. Select Eye-To-Hand in the Calibration tab.",
             )
             return
 
@@ -346,22 +351,22 @@ class TracePanel(QWidget):
                 sample_spacing_mm=self.spacing_spinbox.value(),
             )
         except ValueError as ex:
-            QMessageBox.warning(self, "웨이포인트 생성", str(ex))
+            QMessageBox.warning(self, "Generate Waypoints", str(ex))
             return
 
         if len(result.waypoints) < 2:
             QMessageBox.warning(
                 self,
-                "웨이포인트 생성",
-                f"유효한 웨이포인트가 {len(result.waypoints)}개뿐입니다 (건너뜀 {result.skipped_pixel_count}개). "
-                "라인이 유효한 3D 영역 위에 있는지 확인해주세요.",
+                "Generate Waypoints",
+                f"Only {len(result.waypoints)} valid waypoint(s) (skipped {result.skipped_pixel_count}).\n"
+                "Check that the line lies over valid 3D data.",
             )
             return
 
         self.waypoints = result.waypoints
         self.status_label_3d.setText(
-            f"웨이포인트 {len(result.waypoints)}개 생성 "
-            f"(건너뜀 {result.skipped_pixel_count}개, 간격 좁아서 병합 {result.merged_close_waypoint_count}개)"
+            f"Generated {len(result.waypoints)} waypoints "
+            f"(skipped {result.skipped_pixel_count}, merged {result.merged_close_waypoint_count} too close together)"
         )
         self._auto_adjust_blend_spinbox()
 
@@ -377,8 +382,8 @@ class TracePanel(QWidget):
 
     def _auto_adjust_blend_spinbox(self) -> None:
         """Set the blend spinbox to a value that's safely valid for the just-generated
-        waypoints, so the user isn't stuck manually retuning it against the "블렌드 반경
-        확인 필요" check in on_execute_clicked every time the line's curvature changes the
+        waypoints, so the user isn't stuck manually retuning it against the "Blend Radius
+        Too Large" check in on_execute_clicked every time the line's curvature changes the
         real 3D spacing (build_waypoints already floors that spacing, but the safe blend
         value still depends on it, so it's set here rather than as a fixed default)."""
         min_spacing = self._min_waypoint_spacing_mm()
@@ -411,15 +416,15 @@ class TracePanel(QWidget):
     def _update_home_status_label(self) -> None:
         home_joints = self.config.home_joints()
         if home_joints is None:
-            self.home_status_label.setText("홈 설정 안 됨")
+            self.home_status_label.setText("No home set")
         else:
             degrees = np.degrees(home_joints)
-            self.home_status_label.setText("홈 설정됨: [" + ", ".join(f"{v:.1f}°" for v in degrees) + "]")
+            self.home_status_label.setText("Home: [" + ", ".join(f"{v:.1f}°" for v in degrees) + "]")
 
     def on_set_home_clicked(self) -> None:
         robot_control = self.robot_connection_widget.robot_control
         if robot_control is None:
-            QMessageBox.warning(self, "홈 설정", "로봇이 연결되어 있지 않습니다.")
+            QMessageBox.warning(self, "Set Home", "Robot is not connected.")
             return
         self.config.set_home_joints(robot_control.get_joint_positions())
         self._update_home_status_label()
@@ -427,15 +432,15 @@ class TracePanel(QWidget):
     def on_move_home_clicked(self) -> None:
         robot_control = self.robot_connection_widget.robot_control
         if robot_control is None:
-            QMessageBox.warning(self, "홈으로 이동", "로봇이 연결되어 있지 않습니다.")
+            QMessageBox.warning(self, "Move To Home", "Robot is not connected.")
             return
         home_joints = self.config.home_joints()
         if home_joints is None:
-            QMessageBox.warning(self, "홈으로 이동", "홈 위치가 설정되어 있지 않습니다.")
+            QMessageBox.warning(self, "Move To Home", "No home position has been set.")
             return
 
         self.move_home_button.setEnabled(False)
-        self.execution_status_label.setText("홈으로 이동 중...")
+        self.execution_status_label.setText("Moving to home...")
         self.robot_connection_widget.pause_polling()
         QApplication.processEvents()
 
@@ -447,7 +452,7 @@ class TracePanel(QWidget):
                     robot_control, robot_control.move_to_joints, home_joints,
                     speed=DEFAULT_JOINT_SPEED, acceleration=DEFAULT_JOINT_ACCELERATION,
                 )
-                result_queue.put((True, "홈 위치로 이동했습니다."))
+                result_queue.put((True, "Moved to the home position."))
             except Exception as ex:  # pylint: disable=broad-except
                 result_queue.put((False, str(ex)))
 
@@ -460,11 +465,11 @@ class TracePanel(QWidget):
         self.robot_connection_widget.resume_polling()
         self.move_home_button.setEnabled(True)
         if success:
-            self.execution_status_label.setText("완료")
-            QMessageBox.information(self, "홈 이동 완료", message)
+            self.execution_status_label.setText("Done")
+            QMessageBox.information(self, "Move To Home Complete", message)
         else:
-            self.execution_status_label.setText(f"실패: {message}")
-            QMessageBox.warning(self, "홈 이동 실패", message)
+            self.execution_status_label.setText(f"Failed: {message}")
+            QMessageBox.warning(self, "Move To Home Failed", message)
 
     # --- Execution -------------------------------------------------------------------------
 
@@ -520,7 +525,7 @@ class TracePanel(QWidget):
                     robot_control, robot_control.move_to_joints, home_joints,
                     speed=DEFAULT_JOINT_SPEED, acceleration=DEFAULT_JOINT_ACCELERATION,
                 )
-            result_queue.put((True, f"완료 - 웨이포인트 {len(self.waypoints)}개"))
+            result_queue.put((True, f"Done - {len(self.waypoints)} waypoints"))
         except Exception as ex:  # pylint: disable=broad-except
             result_queue.put((False, str(ex)))
 
@@ -537,7 +542,7 @@ class TracePanel(QWidget):
             return
         robot_control = self.robot_connection_widget.robot_control
         if robot_control is None:
-            QMessageBox.warning(self, "실행", "로봇이 연결되어 있지 않습니다.")
+            QMessageBox.warning(self, "Execute", "Robot is not connected.")
             return
 
         # A blend radius that overlaps into the neighboring segment (i.e. more than half the
@@ -548,24 +553,32 @@ class TracePanel(QWidget):
         if blend_mm > min_spacing / 2:
             QMessageBox.warning(
                 self,
-                "블렌드 반경 확인 필요",
-                f"블렌드 반경({blend_mm:.1f}mm)이 웨이포인트 최소 간격({min_spacing:.1f}mm)의 절반보다 큽니다.\n"
-                "이 상태로 실행하면 인접 블렌드 구간이 겹쳐서, 중간 웨이포인트를 건너뛰고 갑자기 빨라지며 "
-                "끝까지 한 번에 움직이는 문제가 생길 수 있습니다 (실제로 겪으신 증상과 일치).\n\n"
-                f"블렌드 반경을 {min_spacing / 2:.1f}mm 이하로 줄이거나, 웨이포인트 간격을 넓혀서 다시 생성해주세요.",
+                "Blend Radius Too Large",
+                f"The blend radius ({blend_mm:.1f} mm) exceeds half the minimum waypoint spacing "
+                f"({min_spacing:.1f} mm).\n"
+                "Running like this makes adjacent blend zones overlap, so the robot skips\n"
+                "intermediate waypoints, speeds up abruptly and rushes to the end.\n\n"
+                f"Reduce the blend radius to {min_spacing / 2:.1f} mm or less, or regenerate the "
+                "waypoints with a wider spacing.",
             )
             return
 
         has_home = self.config.home_joints() is not None
-        sequence = "홈 → 접근(moveJ) → 라인 트레이싱 → 후퇴(moveJ) → 홈" if has_home else "접근(moveJ) → 라인 트레이싱 → 후퇴(moveJ) (홈 미설정)"
+        sequence = (
+            "home → approach (moveJ) → line tracing → retreat (moveJ) → home"
+            if has_home
+            else "approach (moveJ) → line tracing → retreat (moveJ)  (no home set)"
+        )
         confirm = QMessageBox.question(
             self,
-            "실행 확인",
-            f"순서: {sequence}\n"
-            f"웨이포인트 {len(self.waypoints)}개, 속도 {self.speed_spinbox.value():.0f} mm/s, "
-            f"가속도 {self.acceleration_spinbox.value():.2f} m/s², 접근/후퇴 거리 {self.approach_spinbox.value():.0f} mm\n\n"
-            "그리퍼가 뾰족합니다 - 로봇 주변에 사람이 없는지, 즉시 비상정지 가능한 상태인지 확인해주세요.\n"
-            "계속하시겠습니까?",
+            "Confirm Execution",
+            f"Sequence: {sequence}\n"
+            f"{len(self.waypoints)} waypoints, speed {self.speed_spinbox.value():.0f} mm/s, "
+            f"acceleration {self.acceleration_spinbox.value():.2f} m/s², "
+            f"approach/retreat {self.approach_spinbox.value():.0f} mm\n\n"
+            "The gripper tip is sharp - keep clear of the robot and be ready to hit the "
+            "emergency stop.\n"
+            "Continue?",
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.No,
         )
@@ -574,7 +587,7 @@ class TracePanel(QWidget):
 
         self.execute_button.setEnabled(False)
         self.stop_button.setEnabled(True)
-        self.execution_status_label.setText("실행 중...")
+        self.execution_status_label.setText("Running...")
         self.robot_connection_widget.pause_polling()
         QApplication.processEvents()
 
@@ -589,17 +602,17 @@ class TracePanel(QWidget):
         self.stop_button.setEnabled(False)
         self._update_execute_button_state()
         if success:
-            self.execution_status_label.setText("완료")
-            QMessageBox.information(self, "실행 완료", message)
+            self.execution_status_label.setText("Done")
+            QMessageBox.information(self, "Execution Complete", message)
         else:
-            self.execution_status_label.setText(f"실패: {message}")
-            QMessageBox.warning(self, "실행 실패", message)
+            self.execution_status_label.setText(f"Failed: {message}")
+            QMessageBox.warning(self, "Execution Failed", message)
 
     def on_stop_clicked(self) -> None:
         robot_control = self.robot_connection_widget.robot_control
         if robot_control is not None:
             robot_control.stop()
-        self.execution_status_label.setText("정지 요청됨")
+        self.execution_status_label.setText("Stop requested")
 
     def get_point_cloud_xyz(self) -> Optional[np.ndarray]:
         return self.point_cloud_xyz

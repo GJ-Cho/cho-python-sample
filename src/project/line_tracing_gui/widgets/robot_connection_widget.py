@@ -57,13 +57,13 @@ class RobotConnectionWidget(QWidget):
         self.ip_input = QLineEdit(self.config.robot_ip())
         self.connect_button = QPushButton("Connect")
         self.connect_button.setCheckable(True)
-        self.reconnect_button = QPushButton("재연결")
-        self.pose_label = QLabel("(연결 안 됨)")
-        self.status_label = QLabel("(연결 안 됨)")
-        self.test_move_button = QPushButton(f"왕복 테스트 (+{TEST_MOVE_OFFSET_MM:.0f}mm X, 저속)")
+        self.reconnect_button = QPushButton("Reconnect")
+        self.pose_label = QLabel("(not connected)")
+        self.status_label = QLabel("(not connected)")
+        self.test_move_button = QPushButton(f"Round-Trip Test (+{TEST_MOVE_OFFSET_MM:.0f} mm X, slow)")
         self.test_move_button.setEnabled(False)
 
-        group_box = QGroupBox("로봇 (UR3e)")
+        group_box = QGroupBox("Robot (UR3e)")
         group_layout = QVBoxLayout()
         ip_form = QFormLayout()
         ip_form.addRow("Robot IP", self.ip_input)
@@ -107,9 +107,9 @@ class RobotConnectionWidget(QWidget):
             spinbox.setSuffix(" deg")
             spinbox.setMaximumWidth(100)
 
-        self.load_tcp_button = QPushButton("불러오기")
+        self.load_tcp_button = QPushButton("Load")
         self.load_tcp_button.clicked.connect(self.on_load_tcp_clicked)
-        self.apply_tcp_button = QPushButton("적용")
+        self.apply_tcp_button = QPushButton("Apply")
         self.apply_tcp_button.clicked.connect(self.on_apply_tcp_clicked)
 
         translation_row = QHBoxLayout()
@@ -127,10 +127,10 @@ class RobotConnectionWidget(QWidget):
         buttons_row.addWidget(self.apply_tcp_button)
 
         form = QFormLayout()
-        form.addRow("위치 (X, Y, Z)", translation_row)
-        form.addRow("회전 (Rx, Ry, Rz)", rotation_row)
+        form.addRow("Position (X, Y, Z)", translation_row)
+        form.addRow("Rotation (Rx, Ry, Rz)", rotation_row)
 
-        group_box = QGroupBox("TCP 오프셋 (로봇 컨트롤러의 set_tcp)")
+        group_box = QGroupBox("TCP Offset (robot controller set_tcp)")
         group_layout = QVBoxLayout()
         group_layout.addLayout(form)
         group_layout.addLayout(buttons_row)
@@ -139,12 +139,12 @@ class RobotConnectionWidget(QWidget):
 
     def on_load_tcp_clicked(self) -> None:
         if self.robot_control is None:
-            QMessageBox.warning(self, "TCP 오프셋", "로봇이 연결되어 있지 않습니다.")
+            QMessageBox.warning(self, "TCP Offset", "Robot is not connected.")
             return
         try:
             tcp_offset = self.robot_control.get_tcp_offset()
         except Exception as ex:  # pylint: disable=broad-except
-            QMessageBox.warning(self, "TCP 오프셋", f"불러오기 실패: {ex}")
+            QMessageBox.warning(self, "TCP Offset", f"Failed to read: {ex}")
             return
         translation = tcp_offset.translation
         rotation_deg = tcp_offset.rotation.as_rotvec(degrees=True)
@@ -157,7 +157,7 @@ class RobotConnectionWidget(QWidget):
 
     def on_apply_tcp_clicked(self) -> None:
         if self.robot_control is None:
-            QMessageBox.warning(self, "TCP 오프셋", "로봇이 연결되어 있지 않습니다.")
+            QMessageBox.warning(self, "TCP Offset", "Robot is not connected.")
             return
         translation = np.array(
             [self.tcp_x_spinbox.value(), self.tcp_y_spinbox.value(), self.tcp_z_spinbox.value()], dtype=np.float32
@@ -167,9 +167,9 @@ class RobotConnectionWidget(QWidget):
         )
         confirm = QMessageBox.question(
             self,
-            "TCP 오프셋 적용",
-            f"TCP 오프셋을 X={translation[0]:.1f} Y={translation[1]:.1f} Z={translation[2]:.1f} mm로 변경합니다.\n"
-            "이후 모든 이동/웨이포인트 계산에 영향을 줍니다. 계속하시겠습니까?",
+            "Apply TCP Offset",
+            f"Set the TCP offset to X={translation[0]:.1f} Y={translation[1]:.1f} Z={translation[2]:.1f} mm.\n"
+            "This affects every subsequent move and waypoint calculation. Continue?",
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.No,
         )
@@ -177,9 +177,9 @@ class RobotConnectionWidget(QWidget):
             return
         try:
             self.robot_control.set_tcp_offset(TransformationMatrix(rotation=rotation, translation=translation))
-            QMessageBox.information(self, "TCP 오프셋", "적용되었습니다.")
+            QMessageBox.information(self, "TCP Offset", "Applied.")
         except Exception as ex:  # pylint: disable=broad-except
-            QMessageBox.warning(self, "TCP 오프셋", f"적용 실패: {ex}")
+            QMessageBox.warning(self, "TCP Offset", f"Failed to apply: {ex}")
 
     def on_connect_clicked(self) -> None:
         if self.connected:
@@ -218,8 +218,8 @@ class RobotConnectionWidget(QWidget):
         self.connect_button.setStyleSheet("")
         self.connect_button.setText("Connect")
         self.test_move_button.setEnabled(False)
-        self.pose_label.setText("(연결 안 됨)")
-        self.status_label.setText("(연결 안 됨)")
+        self.pose_label.setText("(not connected)")
+        self.status_label.setText("(not connected)")
         self.status_label.setStyleSheet("")
         self.robot_connected.emit(False)
 
@@ -265,13 +265,13 @@ class RobotConnectionWidget(QWidget):
         # state so a failed move has an obvious explanation instead of a generic error.
         assert self.robot_control is not None
         if self.robot_control.is_emergency_stopped():
-            self.status_label.setText("⚠ 비상정지(E-stop) 상태 - 펜던트에서 해제 후 '재연결'을 눌러주세요")
+            self.status_label.setText("⚠ Emergency stop - clear on the pendant, then press 'Reconnect'")
             self.status_label.setStyleSheet("background-color: #a32d2d; color: white;")
         elif self.robot_control.is_protective_stopped():
-            self.status_label.setText("⚠ 보호정지(Protective stop) 상태 - 펜던트에서 해제 후 '재연결'을 눌러주세요")
+            self.status_label.setText("⚠ Protective stop - clear on the pendant, then press 'Reconnect'")
             self.status_label.setStyleSheet("background-color: #854f0b; color: white;")
         else:
-            self.status_label.setText("정상 (이동 가능)")
+            self.status_label.setText("Normal (ready to move)")
             self.status_label.setStyleSheet("background-color: #3b6d11; color: white;")
 
     def _run_test_move(self) -> None:
@@ -321,8 +321,8 @@ class RobotConnectionWidget(QWidget):
         if success:
             QMessageBox.information(
                 self,
-                "왕복 테스트 완료",
-                f"실제 이동량 (mm): {result}\n(기대값: [{TEST_MOVE_OFFSET_MM:.0f}, 0, 0])",
+                "Round-Trip Test Complete",
+                f"Measured displacement (mm): {result}\n(expected: [{TEST_MOVE_OFFSET_MM:.0f}, 0, 0])",
             )
         else:
-            QMessageBox.warning(self, "왕복 테스트 실패", str(result))
+            QMessageBox.warning(self, "Round-Trip Test Failed", str(result))
