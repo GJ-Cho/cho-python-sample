@@ -85,9 +85,15 @@ Z축(수직 접촉에 필요한 방향)은 그대로 보존되고, Z축 둘레�
 
 ## 현재 상태
 
-Connect / Calibrate / Trace 3탭 모두 동작 확인됨 (카메라 캡처, 라인 드로잉, 웨이포인트 생성 및 3D
-프리뷰, 홈 포지션, E-stop/protective-stop 감지 및 재연결, 실제 로봇 트레이싱 실행까지 실기 검증
+Connect / Calibration / Line Tracing 3탭 모두 동작 확인됨 (카메라 캡처, 라인 드로잉, 웨이포인트 생성
+및 3D 프리뷰, 홈 포지션, E-stop/protective-stop 감지 및 재연결, 실제 로봇 트레이싱 실행까지 실기 검증
 완료).
+
+단, 위 실기 검증은 전부 **eye-to-hand** 기준이다. `build_waypoints`는 처음부터 `robot_pose` 인자로
+eye-in-hand를 지원했지만 GUI에서 그 값을 넣을 방법이 없어 거부하고 있었는데, Calibration 탭의
+**Robot Capture Pose** 섹션(YAML 불러오기 / 로봇에서 직접 읽기)으로 연결했다. **eye-in-hand 경로는
+아직 실기로 확인하지 않았다** — 첫 사용 시 저속으로, 3D 프리뷰에서 웨이포인트가 표면 위에 제대로
+얹히는지 먼저 확인할 것.
 
 ## 향후 개선 여지
 

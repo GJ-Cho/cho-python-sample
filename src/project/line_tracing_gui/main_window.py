@@ -28,7 +28,7 @@ class LineTracingMainWindow(QMainWindow):
         self.connect_tab = self._build_connect_tab()
         self.main_tab_widget.addTab(self.connect_tab, "Connect")
 
-        self.calibration_panel = CalibrationPanel()
+        self.calibration_panel = CalibrationPanel(self.robot_connection_widget)
         self.main_tab_widget.addTab(self.calibration_panel, "Calibration")
 
         self.trace_panel = TracePanel(self.camera_panel, self.calibration_panel, self.robot_connection_widget)

@@ -15,7 +15,8 @@ Zivid 공식 `zivid-python-samples`의 Hand-Eye GUI와 같은 스택/관례를 �
   프로그램은 없습니다 — 공식 `ur_rtde` 라이브러리가 PC에서 직접 제어합니다.
 - **TCP 오프셋**(그리퍼 팁 위치)은 로봇 컨트롤러에서 설정합니다: PolyScope Installation → TCP
   Configuration (미터 단위). GUI의 Connect 탭에서 현재 값을 조회/수정할 수도 있습니다.
-- **카메라**: Zivid2+ MR130, eye-to-hand(고정 거치) 캘리브레이션 결과(YAML)가 필요합니다.
+- **카메라**: Zivid2+ MR130, hand-eye 캘리브레이션 결과(YAML)가 필요합니다. eye-to-hand(고정 거치)와
+  eye-in-hand(플랜지 장착)를 모두 지원하지만, 실기 검증은 eye-to-hand로만 했습니다.
 
 ## 실행
 
@@ -28,8 +29,10 @@ python src/project/line_tracing_gui/main.py      # 리포 루트에서
 
 - **Connect**: 카메라 연결/라이브 프리뷰, 로봇 IP 연결, 상태(정상/E-stop/protective-stop) 표시,
   현재 TCP/조인트 모니터링, TCP 오프셋 조회/수정.
-- **Calibrate**: eye-to-hand 캘리브레이션 YAML 파일 불러오기.
-- **Trace**: 캡처 → 2D 이미지 위에 라인 드로잉 → 웨이포인트 생성(간격 조절 가능, 3D 프리뷰로 확인) →
+- **Calibration**: hand-eye 캘리브레이션 YAML 불러오기. eye-in-hand를 선택하면 아래에 **Robot Capture
+  Pose** 섹션이 나타납니다 — 캡처 시점의 로봇 pose가 추가로 필요하기 때문입니다(YAML로 불러오거나
+  로봇에서 직접 읽기). 로봇에서 읽는 것은 **캡처 당시 자세 그대로 서 있을 때만** 유효합니다.
+- **Line Tracing**: 캡처 → 2D 이미지 위에 라인 드로잉 → 웨이포인트 생성(간격 조절 가능, 3D 프리뷰로 확인) →
   접근/후퇴 거리·속도·가속도·블렌드 설정 → 실행(홈 → 접근 → 라인 트레이싱 → 후퇴 → 홈).
 
 ## 오프라인 개발 테스트

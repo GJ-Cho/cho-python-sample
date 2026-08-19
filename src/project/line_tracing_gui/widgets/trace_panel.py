@@ -345,12 +345,14 @@ class TracePanel(QWidget):
 
         hand_eye_transform = self.calibration_panel.get_hand_eye_transform()
         eye_in_hand = self.calibration_panel.get_eye_in_hand()
-        if eye_in_hand:
+        capture_pose = self.calibration_panel.get_capture_pose()
+        if eye_in_hand and capture_pose is None:
             QMessageBox.warning(
                 self,
                 "Generate Waypoints",
-                "Eye-In-Hand is not supported yet - recording the robot pose at capture time is\n"
-                "not implemented. Select Eye-To-Hand in the Calibration tab.",
+                "Eye-In-Hand needs the robot pose at capture time.\n"
+                "Set it under Robot Capture Pose in the Calibration tab - either load a YAML, or\n"
+                "read it off the robot while it still stands where it stood for the capture.",
             )
             return
 
@@ -360,6 +362,7 @@ class TracePanel(QWidget):
                 self.point_cloud_xyz,
                 hand_eye_transform,
                 eye_in_hand=eye_in_hand,
+                robot_pose=capture_pose,
                 sample_spacing_mm=self.spacing_spinbox.value(),
             )
         except ValueError as ex:
@@ -383,10 +386,24 @@ class TracePanel(QWidget):
         self._auto_adjust_blend_spinbox()
 
         # The 3D view is drawn in camera frame (matching the point cloud); undo the
-        # hand-eye transform to get each waypoint back from base frame for display.
-        camera_frame_waypoints = [hand_eye_transform.inv() * waypoint for waypoint in self.waypoints]
+        # camera-to-base transform to get each waypoint back from base frame for display.
+        camera_to_base_transform = self._camera_to_base_transform()
+        camera_frame_waypoints = [camera_to_base_transform.inv() * waypoint for waypoint in self.waypoints]
         self.pointcloud_viewer.show_waypoints(camera_frame_waypoints)
         self._update_execute_button_state()
+
+    def _camera_to_base_transform(self) -> TransformationMatrix:
+        """Camera frame -> robot base frame, matching what build_waypoints applies.
+
+        Eye-to-hand is the hand-eye transform alone; eye-in-hand additionally goes
+        through the robot's pose at capture time. Falls back to the hand-eye transform
+        when that pose is not set, so the 3D preview still draws something sensible.
+        """
+        hand_eye_transform = self.calibration_panel.get_hand_eye_transform()
+        capture_pose = self.calibration_panel.get_capture_pose()
+        if capture_pose is None:
+            return hand_eye_transform
+        return capture_pose * hand_eye_transform
 
     def _update_execute_button_state(self) -> None:
         has_waypoints = len(self.waypoints) >= 2
@@ -414,8 +431,7 @@ class TracePanel(QWidget):
             f"X={translation[0]:.1f} Y={translation[1]:.1f} Z={translation[2]:.1f}   "
             f"Rx={rotation_deg[0]:.1f} Ry={rotation_deg[1]:.1f} Rz={rotation_deg[2]:.1f}"
         )
-        hand_eye_transform = self.calibration_panel.get_hand_eye_transform()
-        camera_frame_position = (hand_eye_transform.inv() * pose).translation
+        camera_frame_position = (self._camera_to_base_transform().inv() * pose).translation
         self.pointcloud_viewer.show_current_position(camera_frame_position)
 
     def _on_joints_updated(self, joint_positions: List[float]) -> None:
