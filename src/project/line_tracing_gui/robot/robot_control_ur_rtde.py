@@ -10,7 +10,7 @@ and will raise if Remote Control mode isn't enabled.
 
 """
 
-from typing import List, Optional, Tuple
+from typing import List, Optional
 
 import numpy as np
 import rtde_control
@@ -28,7 +28,6 @@ DEFAULT_JOINT_SPEED = 0.2  # rad/s
 DEFAULT_JOINT_ACCELERATION = 0.3  # rad/s^2
 
 IS_MOVING_SPEED_THRESHOLD = 1e-3  # m/s and rad/s, on the combined 6-vector norm
-_ZERO_RTDE_POSE = [0.0] * 6  # identity pose, for asking FK for the bare flange
 
 
 class SimpleRobotConfiguration:
@@ -92,45 +91,16 @@ class RobotControlURRTDE(RobotControl):
     def get_flange_pose(self) -> RobotTarget:
         """Pose of the tool flange (the 6th axis face) in base frame.
 
-        Uses get_tcp_offset(), the command-side offset, so it is only right once that
-        matches the controller - run sync_command_tcp_offset first if unsure. The
-        getForwardKinematics route would not need that, but it costs an extra control-script
-        round trip and this is called on every eye-in-hand capture.
+        get_pose() returns getActualTCPPose(), which already has the controller's TCP
+        offset applied: base_T_tcp = base_T_flange * flange_T_tcp. Taking that offset back
+        out gives the flange, which is what a hand-eye calibration performed against the
+        flange pairs with - see CalibrationPanel's pose reference.
         """
         self._require_connected()
-        return RobotTarget(name="Current Flange Pose", pose=self.get_pose().pose * self.get_tcp_offset().inv())
-
-    def get_controller_tcp_offset(self) -> TransformationMatrix:
-        """The TCP offset the controller actually has active, from measurements alone.
-
-        Asks the calibrated kinematics for the flange with an explicitly zero TCP, so the
-        answer holds whatever the command side happens to carry, then reads the offset off
-        as flange^-1 * actual TCP pose. This costs a control-script round trip
-        (getForwardKinematics), so it is called deliberately - never on every pose read.
-        """
-        self._require_connected()
-        assert self.rtde_control is not None and self.rtde_receive is not None
-        flange_rtde_pose = self.rtde_control.getForwardKinematics(self.rtde_receive.getActualQ(), _ZERO_RTDE_POSE)
-        flange_pose = _rtde_pose_to_transformation_matrix(flange_rtde_pose)
-        return flange_pose.inv() * self.get_pose().pose
-
-    def sync_command_tcp_offset(self) -> Tuple[TransformationMatrix, TransformationMatrix]:
-        """Point the command side's TCP at the one the controller has active.
-
-        moveL, movePath and getInverseKinematics all place the *command* side's TCP
-        (get_tcp_offset) on the pose they are given, and RTDEControlInterface starts with
-        its own - not necessarily the pendant's installation TCP. When the two disagree,
-        commanded poses land the flange where the tool tip was meant to go.
-
-        Returns (offset before, offset after) so callers can report a correction.
-        """
-        self._require_connected()
-        assert self.rtde_control is not None
-        before = self.get_tcp_offset()
-        after = self.get_controller_tcp_offset()
-        if not self.rtde_control.setTcp(_pose_to_rtde(after)):
-            raise RuntimeError("setTcp failed while syncing the command-side TCP offset.")
-        return before, after
+        return RobotTarget(
+            name="Current Flange Pose",
+            pose=self.get_pose().pose * self.get_tcp_offset().inv(),
+        )
 
     def is_moving(self) -> bool:
         self._require_connected()
@@ -145,12 +115,8 @@ class RobotControlURRTDE(RobotControl):
         return list(self.rtde_receive.getActualQ())
 
     def get_tcp_offset(self) -> TransformationMatrix:
-        """TCP offset the *command* side uses: what moveL/movePath/IK put on a given pose.
-
-        This is RTDEControlInterface's own offset, which starts out independent of the
-        pendant's installation TCP - compare against get_controller_tcp_offset, and use
-        sync_command_tcp_offset to make them agree.
-        """
+        """Active TCP offset (flange -> tool tip), as configured on the controller
+        (PolyScope Installation -> TCP Configuration, or via set_tcp_offset below)."""
         self._require_connected()
         assert self.rtde_control is not None
         return _rtde_pose_to_transformation_matrix(self.rtde_control.getTCPOffset())

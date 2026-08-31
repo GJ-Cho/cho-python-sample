@@ -99,43 +99,6 @@ eye-in-hand를 지원했지만 GUI에서 그 값을 넣을 방법이 없어 거�
 (**Move To Capture Pose** 버튼 → `RobotConnectionWidget.move_to_pose`). YAML 불러오기와 수동
 읽기도 남겨 두었지만, 수동 읽기는 캡처 당시 자세 그대로 서 있을 때만 유효하다.
 
-### RTDE의 command 측과 receive 측은 서로 다른 TCP를 가질 수 있다
-
-**실기에서 발견된 문제**: 팬던트 Installation에 TCP가 정상 지정되어 있는데도 웨이포인트로 이동할 때
-**플랜지가 목표 지점에 놓였다**(즉 `base_T_flange = base_T_target`). 팁이 가야 하는데.
-
-원인은 RTDE의 두 인터페이스가 서로 다른 TCP를 참조한다는 점이다:
-
-| | 무엇을 쓰는가 |
-|---|---|
-| `rtde_receive.getActualTCPPose()` | 컨트롤러의 활성 TCP (= 팬던트 Installation) |
-| `rtde_control.moveL` / `movePath` / `getInverseKinematics` | **`RTDEControlInterface` 자신의 TCP** |
-
-`RTDEControlInterface`는 자체 TCP 오프셋을 들고 있고(`getTCPOffset` / `setTcp`), 이것이 팬던트
-Installation 값과 자동으로 같아지지는 않는다. `connect()`는 `setTcp`를 호출하지 않았으므로 command
-측이 0인 상태로 이동 명령이 나갔고, `moveL`은 **command 측 TCP**를 목표 pose에 놓으므로 플랜지가
-목표에 갔다. 읽기(`get_pose`)는 컨트롤러 값을 반영하니 좌표만 봐서는 정상으로 보인다 — 이 비대칭이
-원인을 가렸다.
-
-**해결** — Connect 탭 TCP Offset 섹션의 **Sync Command TCP** 버튼 (`sync_command_tcp_offset`):
-
-1. `get_controller_tcp_offset()`이 `getForwardKinematics(q, [0]*6)`로 플랜지 pose를 구한다 — TCP를
-   0으로 명시하므로 command 측 TCP가 무엇이든 정확하다.
-2. `flange^-1 · getActualTCPPose()` → 컨트롤러가 실제로 쓰는 TCP를 **측정만으로** 복원한다.
-3. 그 값을 `setTcp()`로 command 측에 심는다. 이후 `moveL`/`movePath`/IK가 팁을 목표에 놓는다.
-
-보정이 필요했는지 여부를 같은 섹션에 표시한다 — 조용히 고치면 실제 설정 문제를 가리게 되므로.
-
-**버튼인 이유 (한 번 실수한 부분)**: 처음엔 `connect()` 직후 자동 실행하도록 넣었는데, RTDE 왕복
-호출 3개(그중 하나는 control-script 호출인 `getForwardKinematics`)를 UI 스레드에서 동기로 돌리는
-바람에 **Connect 버튼이 `Connecting...`에서 멈췄다.** 게다가 `setTcp`는 로봇 상태를 바꾸는 쓰기
-동작이라 "연결만 했는데" 일어나야 할 일이 아니다. 지금은 명시적 버튼이고, 다른 블로킹 로봇 호출과
-같은 워커 스레드 + `processEvents` 패턴을 써서 응답이 느려도 창이 얼지 않는다.
-
-`get_flange_pose()`는 `get_pose() * get_tcp_offset().inv()` 구현으로 유지한다 — eye-in-hand 캡처마다
-호출되는 경로라 control-script 왕복을 넣지 않는다. 대신 command 측이 동기화되어 있어야 정확하므로,
-eye-in-hand + Pose Reference=Flange 로 쓸 거면 Sync Command TCP 를 먼저 눌러야 한다.
-
 ### eye-in-hand의 함정: 로봇이 알려주는 pose는 TCP pose다
 
 결정 #2에 따라 이 프로젝트는 그리퍼 팁을 **0이 아닌 TCP**로 컨트롤러에 설정해 둔다. 그런데
@@ -197,6 +160,23 @@ eye-to-hand는 `robot_pose`를 아예 쓰지 않으므로(`camera_to_base = hand
 
 **eye-in-hand 경로는 아직 실기로 확인하지 않았다** — 첫 사용 시 저속으로, 위의 노란 점 대조로 Pose
 Reference부터 확정한 뒤 진행할 것.
+
+### 폐기된 시도: `getForwardKinematics`로 플랜지 pose 구하기 (실기에서 실패)
+
+command 측 TCP를 컨트롤러 값에 자동으로 맞추려고 `getForwardKinematics(q, [0]*6)`으로 플랜지 pose를
+구하고, `flange^-1 · getActualTCPPose()`로 컨트롤러 TCP를 복원해 `setTcp()`로 심는 방식을 넣었다가
+**되돌렸다**. 두 가지가 잘못됐다:
+
+1. `connect()` 직후 동기 실행 → RTDE 왕복 3개가 UI 스레드를 막아 **Connect가 `Connecting...`에서
+   멈췄다.**
+2. 버튼으로 분리한 뒤에도 **`getForwardKinematics(q, [0]*6)`이 플랜지 pose를 돌려주지 않았다.**
+   실기 관측값으로 역산하면 이 호출의 결과가 `getTCPOffset()` 값(`[0,0,186.59]`, Rz=−180)과 일치했고,
+   그 결과 `setTcp()`에 쓰레기 값(`[−226.7, 173.2, 98.8]`)이 기록되어 로봇 상태가 더 꼬였다.
+
+교훈: **검증하지 않은 ur_rtde API 동작을 가정한 채 `setTcp()`처럼 로봇 상태를 쓰는 코드를 만들지
+않는다.** TCP 규약이 의심되면 먼저 측정으로 확정한다 — 예: `getActualTCPPose()`를 읽고 →
+`setTcp([0]*6)` → 다시 읽어서, 값이 변하면 `getActualTCPPose()`가 `setTcp()`를 따르는 것이고 그 차이가
+활성 오프셋이다. 값이 그대로면 command 측과 receive 측이 실제로 분리된 것이다.
 
 ## 향후 개선 여지
 
