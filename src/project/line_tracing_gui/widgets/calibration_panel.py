@@ -111,6 +111,19 @@ class CalibrationPanel(QWidget):
         self.load_hand_eye_button = QPushButton("Load...")
         self.load_hand_eye_button.clicked.connect(self.on_load_hand_eye_clicked)
 
+        # Zivid's own touch-test sample commands the robot in flange poses and takes the TCP
+        # out in software, so the robot poses a hand-eye calibration registers are flange
+        # poses and its result is flange_T_camera. Calibrating with a TCP active instead
+        # yields tcp_T_camera, which Pose Reference below can still accommodate - but this
+        # says up front which one the panel expects.
+        self.eye_in_hand_note = QLabel(
+            "Eye-In-Hand: the YAML should be the camera pose relative to the FLANGE "
+            "(calibrate with the TCP zeroed). Pose Reference below must match it."
+        )
+        self.eye_in_hand_note.setWordWrap(True)
+        self.eye_in_hand_note.setStyleSheet(f"color: {TEXT_MUTED};")
+        self.eye_in_hand_note.setVisible(self.eye_in_hand)
+
         self.hand_eye_pose_widget = PoseWidget.HandEye(
             eye_in_hand=self.eye_in_hand, display_mode=PoseWidgetDisplayMode.Basic
         )
@@ -132,6 +145,7 @@ class CalibrationPanel(QWidget):
         group_layout = QVBoxLayout()
         group_layout.setSpacing(10)
         group_layout.addLayout(form_layout)
+        group_layout.addWidget(self.eye_in_hand_note)
         group_layout.addWidget(self.hand_eye_pose_widget)
         group_box.setLayout(group_layout)
         return group_box
@@ -335,6 +349,7 @@ class CalibrationPanel(QWidget):
         self.eye_in_hand = not eye_to_hand_checked
         self.config.set_eye_in_hand(self.eye_in_hand)
         self.hand_eye_pose_widget.on_eye_in_hand_toggled(self.eye_in_hand)
+        self.eye_in_hand_note.setVisible(self.eye_in_hand)
         self.capture_pose_group_box.setVisible(self.eye_in_hand)
         self.eye_in_hand_changed.emit(self.eye_in_hand)
 
