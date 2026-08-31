@@ -10,21 +10,28 @@ section. Eye-in-hand additionally needs the robot pose at the moment the frame
 was captured - point_base = robot_pose * hand_eye_transform * point_camera - so a
 second section appears for it, and is hidden again for eye-to-hand.
 
-That capture pose is recorded automatically: the robot stands still while the
-frame is taken, so its pose at that moment is the capture pose, and TracePanel
-records it on every capture (see record_capture_pose). It doubles as a position
-to send the robot back to, which is what the Move To Capture Pose button does.
-It can also be read from the robot on demand or loaded from a YAML - reading on
-demand is only correct while the robot still stands where it stood for the
-capture, otherwise the waypoints come out transformed by the difference.
+That capture pose always comes from reading the robot - there is no file for it.
+The robot stands still while the frame is taken, so its pose at that moment is
+the capture pose, and TracePanel reads it on every capture (see
+record_capture_pose). Read From Robot repeats that on demand, which is only
+correct while the robot still stands where it stood for the capture. The value
+doubles as a position to send the robot back to (Move To Capture Pose).
 
-What the robot reports is its *TCP* pose (getActualTCPPose), which includes the
-tool offset configured on the controller - and this app deliberately keeps a
-non-zero one for the pointed gripper (see PLAN.md). A hand-eye calibration is
-usually performed against the bare flange instead, in which case that offset has
-to come back out or every waypoint ends up displaced by it. Pose Reference picks
-which convention the loaded calibration uses; it only matters for eye-in-hand,
-since eye-to-hand never multiplies by a robot pose at all.
+The robot only ever reports getActualTCPPose(), i.e. the pose with the
+controller's tool offset applied - and this app deliberately keeps a non-zero one
+for the pointed gripper (see PLAN.md). So which frame the capture pose ends up in
+is decided by Pose Reference, and it has to be the frame the hand-eye YAML is
+expressed in, or the middle frame does not cancel in
+base_T_touch = capture_pose * hand_eye * camera_T_point:
+
+    Flange : hand_eye = flange_T_camera -> capture pose = base_T_flange
+             (get_flange_pose takes the active TCP offset back out)
+    TCP    : hand_eye = tcp_T_camera    -> capture pose = base_T_tcp
+             (getActualTCPPose used as-is)
+
+Zivid's own samples calibrate against the flange, so Flange is the default and
+what this rig uses. Either way this only matters for eye-in-hand - eye-to-hand
+never multiplies by a robot pose at all.
 
 No TCP offset UI here - the robot controller's own set_tcp handles the
 gripper tip offset (see robot/README.md), not this app.
@@ -89,10 +96,6 @@ class CalibrationPanel(QWidget):
         saved_hand_eye_path = self.config.hand_eye_transform_path()
         if saved_hand_eye_path is not None and saved_hand_eye_path.exists():
             self._load_hand_eye_from_path(saved_hand_eye_path)
-
-        saved_capture_pose_path = self.config.capture_pose_path()
-        if saved_capture_pose_path is not None and saved_capture_pose_path.exists():
-            self._load_capture_pose_from_path(saved_capture_pose_path)
 
     # --- Hand-eye transform ----------------------------------------------------------------
 
@@ -177,16 +180,25 @@ class CalibrationPanel(QWidget):
     def _build_capture_pose_group_box(self) -> QGroupBox:
         hint_label = QLabel(
             "The robot's end-effector pose in base frame at the moment the frame was captured. "
-            "Recorded automatically on every capture in the Line Tracing tab, since the robot "
-            "stands still for it - so the value below is also where you can send the robot back to.\n"
-            "Pose Reference must match the frame the hand-eye calibration recorded its robot "
-            "poses in. If a TCP was active on the pendant while calibrating, that is TCP; if the "
-            "TCP was zero, that is Flange. Get it wrong and the whole path is rigidly shifted by "
-            "the TCP offset - the tip then traces where the flange should have gone. Nothing in "
-            "this GUI can show that: only the robot can."
+            "Read off the robot on every capture in the Line Tracing tab, since the robot stands "
+            "still for it - so the value below is also where you can send the robot back to."
         )
         hint_label.setWordWrap(True)
         hint_label.setStyleSheet(f"color: {TEXT_MUTED};")
+
+        # The robot only ever reports getActualTCPPose(), so which frame the capture pose ends
+        # up in is decided here - and it has to be the frame the hand-eye YAML is expressed in,
+        # otherwise the middle frame does not cancel in
+        # base_T_touch = capture_pose * hand_eye * camera_T_point.
+        reference_explanation_label = QLabel(
+            "Pose Reference - which frame the hand-eye YAML is expressed in:\n"
+            "    Flange:  hand_eye = flange_T_camera  →  capture pose = base_T_flange"
+            "   (the active TCP offset is taken back out)\n"
+            "    TCP:     hand_eye = tcp_T_camera     →  capture pose = base_T_tcp"
+            "      (what the robot reports, used as-is)"
+        )
+        reference_explanation_label.setWordWrap(True)
+        reference_explanation_label.setStyleSheet(f"color: {TEXT_MUTED};")
 
         self.flange_reference_radio = QRadioButton("Flange (6th axis face, TCP removed)")
         self.tcp_reference_radio = QRadioButton("TCP (as configured on the controller)")
@@ -200,8 +212,6 @@ class CalibrationPanel(QWidget):
         self.capture_pose_source_field = QLineEdit()
         self.capture_pose_source_field.setReadOnly(True)
         self.capture_pose_source_field.setPlaceholderText("(not set)")
-        self.load_capture_pose_button = QPushButton("Load...")
-        self.load_capture_pose_button.clicked.connect(self.on_load_capture_pose_clicked)
         self.read_capture_pose_button = QPushButton("Read From Robot")
         self.read_capture_pose_button.clicked.connect(self.on_read_capture_pose_clicked)
         self.move_to_capture_pose_button = QPushButton("Move To Capture Pose")
@@ -212,7 +222,6 @@ class CalibrationPanel(QWidget):
 
         source_row = QHBoxLayout()
         source_row.addWidget(self.capture_pose_source_field, stretch=1)
-        source_row.addWidget(self.load_capture_pose_button)
         source_row.addWidget(self.read_capture_pose_button)
         source_row.addWidget(self.move_to_capture_pose_button)
 
@@ -229,6 +238,7 @@ class CalibrationPanel(QWidget):
         group_layout = QVBoxLayout()
         group_layout.setSpacing(10)
         group_layout.addWidget(hint_label)
+        group_layout.addWidget(reference_explanation_label)
         group_layout.addLayout(form_layout)
         group_layout.addWidget(self.capture_pose_widget)
         group_box.setLayout(group_layout)
@@ -240,24 +250,6 @@ class CalibrationPanel(QWidget):
         self.capture_pose_is_set = True
         self.move_to_capture_pose_button.setEnabled(True)
 
-    def _load_capture_pose_from_path(self, path: Path) -> None:
-        try:
-            matrix = load_and_assert_affine_matrix(path)
-        except RuntimeError as ex:
-            QMessageBox.warning(self, "Robot Capture Pose", f"Failed to load {path}:\n{ex}")
-            return
-        self._set_capture_pose(TransformationMatrix.from_matrix(matrix), str(path))
-        self.config.set_capture_pose_path(path)
-
-    def on_load_capture_pose_clicked(self) -> None:
-        saved_path = self.config.capture_pose_path()
-        start_dir = str(saved_path.parent) if saved_path is not None else str(Path.home())
-        file_path, _ = QFileDialog.getOpenFileName(
-            self, "Select Robot Capture Pose YAML", start_dir, "YAML files (*.yaml *.yml)"
-        )
-        if not file_path:
-            return
-        self._load_capture_pose_from_path(Path(file_path))
 
     def record_capture_pose(self, source: str = RECORDED_AT_CAPTURE_SOURCE) -> Optional[str]:
         """Record the robot's current pose as the capture pose; returns an error, or None.

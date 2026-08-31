@@ -33,10 +33,19 @@ python src/project/line_tracing_gui/main.py      # 리포 루트에서
   Pose** 섹션이 나타납니다 — 캡처 시점의 로봇 pose가 추가로 필요하기 때문입니다. 이 값은 캡처할 때마다
   **자동으로 기록**되므로(캡처 중에는 로봇이 정지해 있으니 그 순간의 pose가 곧 캡처 pose) 따로 입력할
   필요가 없습니다. 기록된 pose로 **Move To Capture Pose** 버튼을 눌러 로봇을 되돌릴 수 있고, 필요하면
-  YAML로 불러오거나 로봇에서 수동으로 읽을 수도 있습니다.
+  **Read From Robot**으로 현재 pose를 다시 읽을 수도 있습니다(캡처 당시 자세 그대로일 때만 유효).
+  캡처 pose는 파일로 불러오지 않습니다 — 항상 로봇에서 읽습니다.
   **Pose Reference**는 hand-eye 캘리브레이션을 무엇을 기준으로 했는지 고르는 항목입니다. 로봇은 TCP가
-  적용된 pose를 알려주므로, 캘리브레이션이 플랜지(6축 끝) 기준이면 TCP 오프셋을 빼야 합니다(기본값
-  `Flange`). 잘못 고르면 모든 웨이포인트가 TCP 오프셋만큼 밀립니다.
+  적용된 pose(`getActualTCPPose`)만 알려주므로, 어느 프레임으로 캡처 pose를 만들지가 여기서 정해집니다:
+
+  ```
+  Flange : hand_eye = flange_T_camera  ->  capture pose = base_T_flange  (활성 TCP 오프셋을 빼줌)
+  TCP    : hand_eye = tcp_T_camera     ->  capture pose = base_T_tcp     (로봇 보고값 그대로)
+  ```
+
+  `base_T_touch = capture pose · hand_eye · camera_T_point` 에서 중간 프레임이 소거되어야 하므로,
+  hand_eye YAML의 프레임과 반드시 일치해야 합니다. Zivid 샘플은 플랜지(6축 끝) 기준으로 캘리브레이션
+  하므로 기본값은 `Flange`입니다. 잘못 고르면 모든 웨이포인트가 TCP 오프셋만큼 밀립니다.
 - **Line Tracing**: 캡처 → 2D 이미지 위에 라인 드로잉 → 웨이포인트 생성(간격 조절 가능, 3D 프리뷰로 확인) →
   접근/후퇴 거리·속도·가속도·블렌드 설정 → 실행(홈 → 접근 → 라인 트레이싱 → 후퇴 → 홈).
 

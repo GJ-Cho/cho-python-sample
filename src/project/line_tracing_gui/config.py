@@ -38,14 +38,6 @@ class AppConfig:
     def set_hand_eye_transform_path(self, path: Path) -> None:
         self.settings.setValue("calibration/hand_eye_transform_path", str(path))
 
-    def capture_pose_path(self) -> Optional[Path]:
-        """Robot pose at capture time, needed only for eye-in-hand (see CalibrationPanel)."""
-        value = self.settings.value("calibration/capture_pose_path", "")
-        return Path(value) if value else None
-
-    def set_capture_pose_path(self, path: Path) -> None:
-        self.settings.setValue("calibration/capture_pose_path", str(path))
-
     def hand_eye_pose_reference(self) -> str:
         """POSE_REFERENCE_FLANGE or POSE_REFERENCE_TCP; only meaningful for eye-in-hand."""
         value = str(self.settings.value("calibration/hand_eye_pose_reference", POSE_REFERENCE_FLANGE))
