@@ -99,8 +99,26 @@ eye-in-hand를 지원했지만 GUI에서 그 값을 넣을 방법이 없어 거�
 (**Move To Capture Pose** 버튼 → `RobotConnectionWidget.move_to_pose`). YAML 불러오기와 수동
 읽기도 남겨 두었지만, 수동 읽기는 캡처 당시 자세 그대로 서 있을 때만 유효하다.
 
+### eye-in-hand의 함정: 로봇이 알려주는 pose는 TCP pose다
+
+결정 #2에 따라 이 프로젝트는 그리퍼 팁을 **0이 아닌 TCP**로 컨트롤러에 설정해 둔다. 그런데
+`RobotControlURRTDE.get_pose()`는 `getActualTCPPose()`, 즉 그 TCP가 **적용된** `base_T_tcp`를
+돌려준다. hand-eye 캘리브레이션을 플랜지(6축 끝) 기준으로 했다면 `hand_eye = flange_T_camera`이므로,
+여기에 `base_T_tcp`를 곱하면 결과가 **정확히 TCP 오프셋만큼 어긋난다**. 뾰족한 그리퍼라 이 오차는
+수십 mm가 될 수 있다.
+
+- `get_flange_pose()`가 `base_T_tcp * (flange_T_tcp)^-1`로 오프셋을 되돌린다.
+- Calibration 탭의 **Pose Reference**(Flange / TCP)로 어느 규약인지 고른다. 기본값은 Flange.
+- 반대로 **Move To Capture Pose**는 `move_j`가 TCP 타깃을 받으므로 flange pose에 오프셋을 **다시
+  곱해서** 보낸다. 안 그러면 TCP 오프셋만큼 못 미치는 곳으로 간다.
+- Pose Reference를 바꾸면 이미 기록된 pose는 다른 규약의 값이므로 지운다.
+
+eye-to-hand는 `robot_pose`를 아예 쓰지 않으므로(`camera_to_base = hand_eye`) 이 문제가 없다. 실기
+검증이 전부 eye-to-hand였던 탓에 드러나지 않았던 부분이다.
+
 **eye-in-hand 경로는 아직 실기로 확인하지 않았다** — 첫 사용 시 저속으로, 3D 프리뷰에서 웨이포인트가
-표면 위에 제대로 얹히는지 먼저 확인할 것.
+표면 위에 제대로 얹히는지 먼저 확인할 것. Pose Reference가 실제 캘리브레이션 규약과 맞는지도 같이
+확인해야 한다.
 
 ## 향후 개선 여지
 

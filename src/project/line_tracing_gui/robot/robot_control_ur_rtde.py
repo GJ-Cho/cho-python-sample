@@ -88,6 +88,20 @@ class RobotControlURRTDE(RobotControl):
             pose=_rtde_pose_to_transformation_matrix(self.rtde_receive.getActualTCPPose()),
         )
 
+    def get_flange_pose(self) -> RobotTarget:
+        """Pose of the tool flange (the 6th axis face) in base frame.
+
+        get_pose() returns getActualTCPPose(), which already has the controller's TCP
+        offset applied: base_T_tcp = base_T_flange * flange_T_tcp. Taking that offset back
+        out gives the flange, which is what a hand-eye calibration performed against the
+        flange pairs with - see CalibrationPanel's pose reference.
+        """
+        self._require_connected()
+        return RobotTarget(
+            name="Current Flange Pose",
+            pose=self.get_pose().pose * self.get_tcp_offset().inv(),
+        )
+
     def is_moving(self) -> bool:
         self._require_connected()
         assert self.rtde_receive is not None

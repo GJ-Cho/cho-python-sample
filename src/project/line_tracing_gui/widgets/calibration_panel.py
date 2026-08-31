@@ -18,6 +18,14 @@ It can also be read from the robot on demand or loaded from a YAML - reading on
 demand is only correct while the robot still stands where it stood for the
 capture, otherwise the waypoints come out transformed by the difference.
 
+What the robot reports is its *TCP* pose (getActualTCPPose), which includes the
+tool offset configured on the controller - and this app deliberately keeps a
+non-zero one for the pointed gripper (see PLAN.md). A hand-eye calibration is
+usually performed against the bare flange instead, in which case that offset has
+to come back out or every waypoint ends up displaced by it. Pose Reference picks
+which convention the loaded calibration uses; it only matters for eye-in-hand,
+since eye-to-hand never multiplies by a robot pose at all.
+
 No TCP offset UI here - the robot controller's own set_tcp handles the
 gripper tip offset (see robot/README.md), not this app.
 
@@ -45,7 +53,7 @@ from zividsamples.gui.widgets.pose_widget import PoseWidget, PoseWidgetDisplayMo
 from zividsamples.save_load_matrix import load_and_assert_affine_matrix
 from zividsamples.transformation_matrix import TransformationMatrix
 
-from line_tracing_gui.config import AppConfig
+from line_tracing_gui.config import POSE_REFERENCE_FLANGE, POSE_REFERENCE_TCP, AppConfig
 from line_tracing_gui.theme import TEXT_MUTED
 from line_tracing_gui.widgets.robot_connection_widget import RobotConnectionWidget
 
@@ -156,10 +164,22 @@ class CalibrationPanel(QWidget):
         hint_label = QLabel(
             "The robot's end-effector pose in base frame at the moment the frame was captured. "
             "Recorded automatically on every capture in the Line Tracing tab, since the robot "
-            "stands still for it - so the value below is also where you can send the robot back to."
+            "stands still for it - so the value below is also where you can send the robot back to.\n"
+            "Pose Reference must match what the hand-eye calibration was performed against. The "
+            "robot reports its TCP pose, so with a flange-based calibration the configured TCP "
+            "offset is taken back out; get this wrong and every waypoint is displaced by that offset."
         )
         hint_label.setWordWrap(True)
         hint_label.setStyleSheet(f"color: {TEXT_MUTED};")
+
+        self.flange_reference_radio = QRadioButton("Flange (6th axis face, TCP removed)")
+        self.tcp_reference_radio = QRadioButton("TCP (as configured on the controller)")
+        self.pose_reference_button_group = QButtonGroup(self)
+        self.pose_reference_button_group.addButton(self.flange_reference_radio)
+        self.pose_reference_button_group.addButton(self.tcp_reference_radio)
+        is_flange = self.config.hand_eye_pose_reference() == POSE_REFERENCE_FLANGE
+        (self.flange_reference_radio if is_flange else self.tcp_reference_radio).setChecked(True)
+        self.flange_reference_radio.toggled.connect(self.on_pose_reference_toggled)
 
         self.capture_pose_source_field = QLineEdit()
         self.capture_pose_source_field.setReadOnly(True)
@@ -180,7 +200,13 @@ class CalibrationPanel(QWidget):
         source_row.addWidget(self.read_capture_pose_button)
         source_row.addWidget(self.move_to_capture_pose_button)
 
+        reference_row = QHBoxLayout()
+        reference_row.addWidget(self.flange_reference_radio)
+        reference_row.addWidget(self.tcp_reference_radio)
+        reference_row.addStretch(1)
+
         form_layout = QFormLayout()
+        form_layout.addRow("Pose Reference", reference_row)
         form_layout.addRow("Capture Pose", source_row)
 
         group_box = QGroupBox("Robot Capture Pose")
@@ -229,7 +255,12 @@ class CalibrationPanel(QWidget):
         if robot_control is None:
             return "Robot is not connected."
         try:
-            target = robot_control.get_pose()
+            # get_pose() is getActualTCPPose(), i.e. the TCP pose. get_flange_pose() takes the
+            # controller's TCP offset back out - see get_pose_reference().
+            if self.get_pose_reference() == POSE_REFERENCE_FLANGE:
+                target = robot_control.get_flange_pose()
+            else:
+                target = robot_control.get_pose()
         except Exception as ex:  # pylint: disable=broad-except
             return f"Failed to read the pose: {ex}"
         self._set_capture_pose(target.pose, source)
@@ -243,6 +274,18 @@ class CalibrationPanel(QWidget):
     def on_move_to_capture_pose_clicked(self) -> None:
         pose = self.get_capture_pose()
         if pose is None:
+            return
+        robot_control = self.robot_connection_widget.robot_control
+        if robot_control is None:
+            QMessageBox.warning(self, "Move To Capture Pose", "Robot is not connected.")
+            return
+        # move_j takes a *TCP* target, so a pose stored against the flange has to have the
+        # TCP offset put back on - otherwise the robot lands one TCP offset short.
+        try:
+            if self.get_pose_reference() == POSE_REFERENCE_FLANGE:
+                pose = pose * robot_control.get_tcp_offset()
+        except Exception as ex:  # pylint: disable=broad-except
+            QMessageBox.warning(self, "Move To Capture Pose", f"Failed to read the TCP offset: {ex}")
             return
         translation = pose.translation
         confirm = QMessageBox.question(
@@ -261,6 +304,28 @@ class CalibrationPanel(QWidget):
             QMessageBox.information(self, "Move To Capture Pose", message)
         else:
             QMessageBox.warning(self, "Move To Capture Pose", message)
+
+    def get_pose_reference(self) -> str:
+        """Which robot pose the hand-eye calibration was performed against.
+
+        POSE_REFERENCE_FLANGE means the calibration used the bare 6th-axis face, so the TCP
+        offset has to come back out of what the robot reports; POSE_REFERENCE_TCP means it
+        used the pose with the TCP applied, which is what the robot reports directly.
+        """
+        return POSE_REFERENCE_FLANGE if self.flange_reference_radio.isChecked() else POSE_REFERENCE_TCP
+
+    def on_pose_reference_toggled(self, _flange_checked: bool) -> None:
+        self.config.set_hand_eye_pose_reference(self.get_pose_reference())
+        # Anything already recorded is in the other convention, so it is now wrong by one TCP
+        # offset. Drop it rather than leave a plausible-looking but stale pose on screen.
+        if self.capture_pose_is_set:
+            self._clear_capture_pose()
+
+    def _clear_capture_pose(self) -> None:
+        self.capture_pose_widget.set_transformation_matrix(TransformationMatrix())
+        self.capture_pose_source_field.clear()
+        self.capture_pose_is_set = False
+        self.move_to_capture_pose_button.setEnabled(False)
 
     # --- Shared ------------------------------------------------------------------------------
 

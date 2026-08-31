@@ -14,6 +14,12 @@ APP_NAME = "LineTracingGUI"
 
 DEFAULT_ROBOT_IP = "192.168.1.10"
 
+# Which robot pose the hand-eye calibration was performed against. The robot reports
+# getActualTCPPose(), i.e. the TCP pose, so a flange-based calibration needs the TCP
+# offset taken back out before the pose is usable - see CalibrationPanel.
+POSE_REFERENCE_FLANGE = "flange"
+POSE_REFERENCE_TCP = "tcp"
+
 
 class AppConfig:
     def __init__(self) -> None:
@@ -39,6 +45,14 @@ class AppConfig:
 
     def set_capture_pose_path(self, path: Path) -> None:
         self.settings.setValue("calibration/capture_pose_path", str(path))
+
+    def hand_eye_pose_reference(self) -> str:
+        """POSE_REFERENCE_FLANGE or POSE_REFERENCE_TCP; only meaningful for eye-in-hand."""
+        value = str(self.settings.value("calibration/hand_eye_pose_reference", POSE_REFERENCE_FLANGE))
+        return value if value in (POSE_REFERENCE_FLANGE, POSE_REFERENCE_TCP) else POSE_REFERENCE_FLANGE
+
+    def set_hand_eye_pose_reference(self, reference: str) -> None:
+        self.settings.setValue("calibration/hand_eye_pose_reference", reference)
 
     def eye_in_hand(self) -> bool:
         return self.settings.value("calibration/eye_in_hand", False, type=bool)
