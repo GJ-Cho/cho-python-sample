@@ -40,6 +40,7 @@ from line_tracing_gui.theme import (
     STATUS_DANGER_STYLE,
     STATUS_OK_STYLE,
     STATUS_WARNING_STYLE,
+    TEXT_MUTED,
 )
 from line_tracing_gui.widgets.spin_box_stepper import SpinBoxStepper
 
@@ -48,6 +49,8 @@ TEST_MOVE_OFFSET_MM = 10.0
 TEST_MOVE_VELOCITY = 0.02  # m/s, deliberately slow for a first verification move
 TEST_MOVE_ACCELERATION = 0.1  # m/s^2
 TCP_FIELD_WIDTH_PX = 76
+# Below this the command-side and controller TCP offsets count as the same value.
+TCP_SYNC_TOLERANCE_MM = 0.5
 
 
 class RobotConnectionWidget(QWidget):
@@ -139,6 +142,9 @@ class RobotConnectionWidget(QWidget):
         buttons_row.addWidget(self.apply_tcp_button)
         buttons_row.addStretch(1)
 
+        self.tcp_sync_label = QLabel("(not connected)")
+        self.tcp_sync_label.setWordWrap(True)
+
         form = QFormLayout()
         form.addRow("Position (X, Y, Z)", translation_row)
         form.addRow("Rotation (Rx, Ry, Rz)", rotation_row)
@@ -147,8 +153,39 @@ class RobotConnectionWidget(QWidget):
         group_layout = QVBoxLayout()
         group_layout.addLayout(form)
         group_layout.addLayout(buttons_row)
+        group_layout.addWidget(self.tcp_sync_label)
         group_box.setLayout(group_layout)
         return group_box
+
+    def _sync_command_tcp_offset(self) -> None:
+        """Make moveL / movePath / IK use the TCP the controller actually has active.
+
+        RTDEControlInterface carries its own TCP offset, and commanded poses place *that*
+        offset on the target - so if it does not match the pendant's installation TCP, a
+        commanded pose puts the flange where the tool tip was meant to go. Syncing on
+        connect removes the possibility, and the label reports whether a correction was
+        needed, since silently fixing it would hide a real setup problem.
+        """
+        assert self.robot_control is not None
+        try:
+            before, after = self.robot_control.sync_command_tcp_offset()
+        except Exception as ex:  # pylint: disable=broad-except
+            self.tcp_sync_label.setText(f"⚠ Could not sync the command-side TCP offset: {ex}")
+            self.tcp_sync_label.setStyleSheet(STATUS_WARNING_STYLE)
+            return
+        translation = after.translation
+        in_effect = (
+            f"moveL / movePath / IK use X={translation[0]:.1f} Y={translation[1]:.1f} Z={translation[2]:.1f} mm"
+        )
+        correction_mm = float(np.linalg.norm(after.translation - before.translation))
+        if correction_mm > TCP_SYNC_TOLERANCE_MM:
+            self.tcp_sync_label.setText(
+                f"⚠ Command-side TCP offset was off by {correction_mm:.1f} mm and has been corrected. {in_effect}"
+            )
+            self.tcp_sync_label.setStyleSheet(STATUS_WARNING_STYLE)
+        else:
+            self.tcp_sync_label.setText(f"Command side already matched the controller. {in_effect}")
+            self.tcp_sync_label.setStyleSheet(f"color: {TEXT_MUTED};")
 
     def on_load_tcp_clicked(self) -> None:
         if self.robot_control is None:
@@ -213,6 +250,7 @@ class RobotConnectionWidget(QWidget):
             self.connect_button.setStyleSheet("")
             self.connect_button.setText("Disconnect")
             self.test_move_button.setEnabled(True)
+            self._sync_command_tcp_offset()
             self.on_load_tcp_clicked()
             self.pose_timer.start()
             self.robot_connected.emit(True)
@@ -236,6 +274,8 @@ class RobotConnectionWidget(QWidget):
         self.pose_label.setText("(not connected)")
         self.status_label.setText("(not connected)")
         self.status_label.setStyleSheet("")
+        self.tcp_sync_label.setText("(not connected)")
+        self.tcp_sync_label.setStyleSheet("")
         self.robot_connected.emit(False)
 
     def on_reconnect_clicked(self) -> None:

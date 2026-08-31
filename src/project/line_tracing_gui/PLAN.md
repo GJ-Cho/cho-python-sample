@@ -99,6 +99,35 @@ eye-in-hand를 지원했지만 GUI에서 그 값을 넣을 방법이 없어 거�
 (**Move To Capture Pose** 버튼 → `RobotConnectionWidget.move_to_pose`). YAML 불러오기와 수동
 읽기도 남겨 두었지만, 수동 읽기는 캡처 당시 자세 그대로 서 있을 때만 유효하다.
 
+### RTDE의 command 측과 receive 측은 서로 다른 TCP를 가질 수 있다
+
+**실기에서 발견된 문제**: 팬던트 Installation에 TCP가 정상 지정되어 있는데도 웨이포인트로 이동할 때
+**플랜지가 목표 지점에 놓였다**(즉 `base_T_flange = base_T_target`). 팁이 가야 하는데.
+
+원인은 RTDE의 두 인터페이스가 서로 다른 TCP를 참조한다는 점이다:
+
+| | 무엇을 쓰는가 |
+|---|---|
+| `rtde_receive.getActualTCPPose()` | 컨트롤러의 활성 TCP (= 팬던트 Installation) |
+| `rtde_control.moveL` / `movePath` / `getInverseKinematics` | **`RTDEControlInterface` 자신의 TCP** |
+
+`RTDEControlInterface`는 자체 TCP 오프셋을 들고 있고(`getTCPOffset` / `setTcp`), 이것이 팬던트
+Installation 값과 자동으로 같아지지는 않는다. `connect()`는 `setTcp`를 호출하지 않았으므로 command
+측이 0인 상태로 이동 명령이 나갔고, `moveL`은 **command 측 TCP**를 목표 pose에 놓으므로 플랜지가
+목표에 갔다. 읽기(`get_pose`)는 컨트롤러 값을 반영하니 좌표만 봐서는 정상으로 보인다 — 이 비대칭이
+원인을 가렸다.
+
+**해결** (`sync_command_tcp_offset`, connect 시 자동 실행):
+
+1. `get_flange_pose()`를 `getForwardKinematics(q, [0]*6)`로 구한다 — TCP를 0으로 명시하므로
+   command 측 TCP가 무엇이든 정확한 플랜지 pose가 나온다.
+2. `get_controller_tcp_offset()` = `flange^-1 · getActualTCPPose()` → 컨트롤러가 실제로 쓰는 TCP를
+   **측정만으로** 복원한다.
+3. 그 값을 `setTcp()`로 command 측에 심는다. 이후 `moveL`/`movePath`/IK가 팁을 목표에 놓는다.
+
+보정이 필요했는지 여부를 Connect 탭 TCP Offset 섹션에 표시한다 — 조용히 고치면 실제 설정 문제를
+가리게 되므로. `get_flange_pose()`도 더 이상 `getTCPOffset()`(command 측)에 의존하지 않는다.
+
 ### eye-in-hand의 함정: 로봇이 알려주는 pose는 TCP pose다
 
 결정 #2에 따라 이 프로젝트는 그리퍼 팁을 **0이 아닌 TCP**로 컨트롤러에 설정해 둔다. 그런데
