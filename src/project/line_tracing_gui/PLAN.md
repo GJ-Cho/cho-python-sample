@@ -109,6 +109,12 @@ eye-in-hand를 지원했지만 GUI에서 그 값을 넣을 방법이 없어 거�
 
 - `get_flange_pose()`가 `base_T_tcp * (flange_T_tcp)^-1`로 오프셋을 되돌린다.
 - Calibration 탭의 **Pose Reference**(Flange / TCP)로 어느 규약인지 고른다. 기본값은 Flange.
+- **판단 기준**: hand-eye 캘리브레이션을 돌릴 때 팬던트에 TCP가 활성이었다면 기록된 로봇 pose가
+  TCP pose이므로 → **TCP**. TCP가 0이었다면 → **Flange**. `hand_eye`와 `robot_pose`가 같은 프레임
+  규약이어야 한다는 것이 요점이고, 어느 쪽이 "옳다"가 아니다.
+- **틀렸을 때의 증상**: `P_correct = (base_T_flange · O · base_T_flange⁻¹) · P_mine`, 즉 경로 전체가
+  TCP 오프셋만큼 강체 이동한다. 팁이 그 이동된 경로를 따라가므로 **원래 라인 위를 플랜지가 지나가는
+  것처럼 보인다**. (실기에서 실제로 관측됨)
 - 반대로 **Move To Capture Pose**는 `move_j`가 TCP 타깃을 받으므로 flange pose에 오프셋을 **다시
   곱해서** 보낸다. 안 그러면 TCP 오프셋만큼 못 미치는 곳으로 간다.
 - Pose Reference를 바꾸면 이미 기록된 pose는 다른 규약의 값이므로 지운다.
@@ -116,9 +122,22 @@ eye-in-hand를 지원했지만 GUI에서 그 값을 넣을 방법이 없어 거�
 eye-to-hand는 `robot_pose`를 아예 쓰지 않으므로(`camera_to_base = hand_eye`) 이 문제가 없다. 실기
 검증이 전부 eye-to-hand였던 탓에 드러나지 않았던 부분이다.
 
-**eye-in-hand 경로는 아직 실기로 확인하지 않았다** — 첫 사용 시 저속으로, 3D 프리뷰에서 웨이포인트가
-표면 위에 제대로 얹히는지 먼저 확인할 것. Pose Reference가 실제 캘리브레이션 규약과 맞는지도 같이
-확인해야 한다.
+### 3D 프리뷰로는 이 부류의 오류를 검증할 수 없다
+
+`TracePanel`은 웨이포인트를 `camera_to_base.inv() * waypoint`로 카메라 프레임에 되돌려 그린다.
+웨이포인트 자체가 `camera_to_base * point_camera`로 만들어졌으므로 이 둘이 **대수적으로 상쇄되어
+정확히 `point_camera`가 나온다** — hand-eye나 capture pose 체인이 아무리 틀려도 프리뷰는 완벽하게
+보인다. 프리뷰는 픽셀→3D 대응과 법선 방향만 검증한다.
+
+체인을 검증할 수 있는 것은 **로봇이 직접 측정한 pose**뿐이다:
+
+- `show_current_position`이 그리는 노란 점은 `camera_to_base.inv() * (로봇이 보고한 pose)`다. 로봇의
+  측정값은 캘리브레이션 체인과 독립이므로, **팁을 표면의 알아볼 수 있는 지점에 조그로 대고** 노란 점이
+  점 구름의 그 지점에 찍히는지 보면 된다. TCP 오프셋만큼 벗어나 있으면 Pose Reference가 틀린 것이다.
+- 웨이포인트 개수 옆에 어떤 체인을 썼는지 표시된다(`_transform_chain_description`).
+
+**eye-in-hand 경로는 아직 실기로 확인하지 않았다** — 첫 사용 시 저속으로, 위의 노란 점 대조로 Pose
+Reference부터 확정한 뒤 진행할 것.
 
 ## 향후 개선 여지
 

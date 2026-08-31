@@ -165,9 +165,11 @@ class CalibrationPanel(QWidget):
             "The robot's end-effector pose in base frame at the moment the frame was captured. "
             "Recorded automatically on every capture in the Line Tracing tab, since the robot "
             "stands still for it - so the value below is also where you can send the robot back to.\n"
-            "Pose Reference must match what the hand-eye calibration was performed against. The "
-            "robot reports its TCP pose, so with a flange-based calibration the configured TCP "
-            "offset is taken back out; get this wrong and every waypoint is displaced by that offset."
+            "Pose Reference must match the frame the hand-eye calibration recorded its robot "
+            "poses in. If a TCP was active on the pendant while calibrating, that is TCP; if the "
+            "TCP was zero, that is Flange. Get it wrong and the whole path is rigidly shifted by "
+            "the TCP offset - the tip then traces where the flange should have gone. Nothing in "
+            "this GUI can show that: only the robot can."
         )
         hint_label.setWordWrap(True)
         hint_label.setStyleSheet(f"color: {TEXT_MUTED};")

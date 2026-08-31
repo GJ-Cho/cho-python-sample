@@ -397,6 +397,7 @@ class TracePanel(QWidget):
         self.status_label_3d.setText(
             f"Generated {len(result.waypoints)} waypoints "
             f"(skipped {result.skipped_pixel_count}, merged {result.merged_close_waypoint_count} too close together)"
+            f" - {self._transform_chain_description()}"
         )
         self._auto_adjust_blend_spinbox()
 
@@ -406,6 +407,19 @@ class TracePanel(QWidget):
         camera_frame_waypoints = [camera_to_base_transform.inv() * waypoint for waypoint in self.waypoints]
         self.pointcloud_viewer.show_waypoints(camera_frame_waypoints)
         self._update_execute_button_state()
+
+    def _transform_chain_description(self) -> str:
+        """Which camera -> base chain the waypoints were built through.
+
+        Shown next to the waypoint count because a wrong Pose Reference produces waypoints
+        that look perfectly fine everywhere in this GUI - the 3D preview maps them back with
+        the inverse of the very transform used to build them, so the error cancels out. The
+        only place it shows is the robot itself. Keeping the chain on screen makes a
+        mismatch visible where the numbers already are.
+        """
+        if not self.calibration_panel.get_eye_in_hand():
+            return "eye-to-hand: hand-eye transform only"
+        return f"eye-in-hand: capture pose ({self.calibration_panel.get_pose_reference()}) x hand-eye transform"
 
     def _camera_to_base_transform(self) -> TransformationMatrix:
         """Camera frame -> robot base frame, matching what build_waypoints applies.
