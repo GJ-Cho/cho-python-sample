@@ -117,16 +117,24 @@ Installation 값과 자동으로 같아지지는 않는다. `connect()`는 `setT
 목표에 갔다. 읽기(`get_pose`)는 컨트롤러 값을 반영하니 좌표만 봐서는 정상으로 보인다 — 이 비대칭이
 원인을 가렸다.
 
-**해결** (`sync_command_tcp_offset`, connect 시 자동 실행):
+**해결** — Connect 탭 TCP Offset 섹션의 **Sync Command TCP** 버튼 (`sync_command_tcp_offset`):
 
-1. `get_flange_pose()`를 `getForwardKinematics(q, [0]*6)`로 구한다 — TCP를 0으로 명시하므로
-   command 측 TCP가 무엇이든 정확한 플랜지 pose가 나온다.
-2. `get_controller_tcp_offset()` = `flange^-1 · getActualTCPPose()` → 컨트롤러가 실제로 쓰는 TCP를
-   **측정만으로** 복원한다.
+1. `get_controller_tcp_offset()`이 `getForwardKinematics(q, [0]*6)`로 플랜지 pose를 구한다 — TCP를
+   0으로 명시하므로 command 측 TCP가 무엇이든 정확하다.
+2. `flange^-1 · getActualTCPPose()` → 컨트롤러가 실제로 쓰는 TCP를 **측정만으로** 복원한다.
 3. 그 값을 `setTcp()`로 command 측에 심는다. 이후 `moveL`/`movePath`/IK가 팁을 목표에 놓는다.
 
-보정이 필요했는지 여부를 Connect 탭 TCP Offset 섹션에 표시한다 — 조용히 고치면 실제 설정 문제를
-가리게 되므로. `get_flange_pose()`도 더 이상 `getTCPOffset()`(command 측)에 의존하지 않는다.
+보정이 필요했는지 여부를 같은 섹션에 표시한다 — 조용히 고치면 실제 설정 문제를 가리게 되므로.
+
+**버튼인 이유 (한 번 실수한 부분)**: 처음엔 `connect()` 직후 자동 실행하도록 넣었는데, RTDE 왕복
+호출 3개(그중 하나는 control-script 호출인 `getForwardKinematics`)를 UI 스레드에서 동기로 돌리는
+바람에 **Connect 버튼이 `Connecting...`에서 멈췄다.** 게다가 `setTcp`는 로봇 상태를 바꾸는 쓰기
+동작이라 "연결만 했는데" 일어나야 할 일이 아니다. 지금은 명시적 버튼이고, 다른 블로킹 로봇 호출과
+같은 워커 스레드 + `processEvents` 패턴을 써서 응답이 느려도 창이 얼지 않는다.
+
+`get_flange_pose()`는 `get_pose() * get_tcp_offset().inv()` 구현으로 유지한다 — eye-in-hand 캡처마다
+호출되는 경로라 control-script 왕복을 넣지 않는다. 대신 command 측이 동기화되어 있어야 정확하므로,
+eye-in-hand + Pose Reference=Flange 로 쓸 거면 Sync Command TCP 를 먼저 눌러야 한다.
 
 ### eye-in-hand의 함정: 로봇이 알려주는 pose는 TCP pose다
 

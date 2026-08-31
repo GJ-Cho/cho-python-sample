@@ -92,24 +92,27 @@ class RobotControlURRTDE(RobotControl):
     def get_flange_pose(self) -> RobotTarget:
         """Pose of the tool flange (the 6th axis face) in base frame.
 
-        Computed from the calibrated kinematics with an explicitly zero TCP offset, not by
-        undoing get_tcp_offset() against get_pose(): those two read opposite sides of RTDE
-        (command vs receive) and are not guaranteed to agree - see
-        get_controller_tcp_offset.
+        Uses get_tcp_offset(), the command-side offset, so it is only right once that
+        matches the controller - run sync_command_tcp_offset first if unsure. The
+        getForwardKinematics route would not need that, but it costs an extra control-script
+        round trip and this is called on every eye-in-hand capture.
         """
         self._require_connected()
-        assert self.rtde_control is not None and self.rtde_receive is not None
-        flange_rtde_pose = self.rtde_control.getForwardKinematics(self.rtde_receive.getActualQ(), _ZERO_RTDE_POSE)
-        return RobotTarget(name="Current Flange Pose", pose=_rtde_pose_to_transformation_matrix(flange_rtde_pose))
+        return RobotTarget(name="Current Flange Pose", pose=self.get_pose().pose * self.get_tcp_offset().inv())
 
     def get_controller_tcp_offset(self) -> TransformationMatrix:
         """The TCP offset the controller actually has active, from measurements alone.
 
-        flange^-1 * actual TCP pose, both taken from rtde_receive, so this reflects
-        whatever the pendant's installation has configured.
+        Asks the calibrated kinematics for the flange with an explicitly zero TCP, so the
+        answer holds whatever the command side happens to carry, then reads the offset off
+        as flange^-1 * actual TCP pose. This costs a control-script round trip
+        (getForwardKinematics), so it is called deliberately - never on every pose read.
         """
         self._require_connected()
-        return self.get_flange_pose().pose.inv() * self.get_pose().pose
+        assert self.rtde_control is not None and self.rtde_receive is not None
+        flange_rtde_pose = self.rtde_control.getForwardKinematics(self.rtde_receive.getActualQ(), _ZERO_RTDE_POSE)
+        flange_pose = _rtde_pose_to_transformation_matrix(flange_rtde_pose)
+        return flange_pose.inv() * self.get_pose().pose
 
     def sync_command_tcp_offset(self) -> Tuple[TransformationMatrix, TransformationMatrix]:
         """Point the command side's TCP at the one the controller has active.
