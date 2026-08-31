@@ -181,8 +181,12 @@ class RobotConnectionWidget(QWidget):
         confirm = QMessageBox.question(
             self,
             "Apply TCP Offset",
-            f"Set the TCP offset to X={translation[0]:.1f} Y={translation[1]:.1f} Z={translation[2]:.1f} mm.\n"
-            "This affects every subsequent move and waypoint calculation. Continue?",
+            f"Set the TCP offset to X={translation[0]:.1f} Y={translation[1]:.1f} Z={translation[2]:.1f} mm.\n\n"
+            "This is the one TCP offset the controller has: it changes where moveL, movePath and IK\n"
+            "put the target AND what the robot reports as its TCP pose. It persists after this\n"
+            "program closes, and it overwrites the pendant's installation TCP - which cannot be read\n"
+            "back through RTDE afterwards, so note the current value down first if you need it.\n\n"
+            "Continue?",
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.No,
         )

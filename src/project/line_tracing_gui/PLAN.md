@@ -161,6 +161,28 @@ eye-to-hand는 `robot_pose`를 아예 쓰지 않으므로(`camera_to_base = hand
 **eye-in-hand 경로는 아직 실기로 확인하지 않았다** — 첫 사용 시 저속으로, 위의 노란 점 대조로 Pose
 Reference부터 확정한 뒤 진행할 것.
 
+### 실기로 측정한 TCP 동작
+
+`setTcp([0]*6)` 전후로 `getActualTCPPose()`를 읽어 확정했다:
+
+```
+before : getActualTCPPose = [+0.2696, +0.1151, +0.3499, ...]   getTCPOffset = [-0.2267, +0.1732, +0.0988, ...]
+TCP=0  : getActualTCPPose = [+0.2282, -0.1582, +0.4714, ...]   getTCPOffset = [0, 0, 0, 0, 0, 0]
+차이   : 301.89 mm
+```
+
+- **TCP 오프셋은 하나뿐이고 command 측과 receive 측이 공유한다.** `setTcp`는 `moveL`/`movePath`/IK
+  뿐 아니라 `getActualTCPPose()`가 보고하는 값까지 바꾼다. 두 측이 분리돼 있다는 가설은 틀렸다.
+- **`setTcp`는 RTDE 세션을 넘어 영속된다.** GUI를 끊고 새 `RTDEControlInterface`를 만들어도 이전에
+  쓴 값이 그대로 남아 있었다. 팬던트 Installation 값을 다시 입력해도 자동 반영되지 않고 `setTcp`로
+  덮어써야 하며, **한 번 덮어쓰면 원래 Installation 값은 RTDE로 되읽을 수 없다.**
+- 따라서 결정 #2는 유효하다: TCP가 팁으로 설정되어 있으면 `moveL`이 팁을 목표에 놓는다. 그리고
+  `get_flange_pose()` = `get_pose() * get_tcp_offset().inv()`도 정확하다 — 같은 하나의 TCP를 쓰므로.
+- **실기에서 관측된 "플랜지가 라인을 따라간다"의 원인은 활성 TCP가 팁이 아니었던 것**이다(당시
+  `getTCPOffset()`이 팬던트 값과 달랐다). 코드가 아니라 설정 문제였다.
+
+`Apply`는 이 영속적이고 되돌릴 수 없는 쓰기를 수행하므로 확인 문구에 그 사실을 명시한다.
+
 ### 폐기된 시도: `getForwardKinematics`로 플랜지 pose 구하기 (실기에서 실패)
 
 command 측 TCP를 컨트롤러 값에 자동으로 맞추려고 `getForwardKinematics(q, [0]*6)`으로 플랜지 pose를
