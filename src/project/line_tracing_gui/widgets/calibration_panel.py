@@ -178,14 +178,11 @@ class CalibrationPanel(QWidget):
     # --- Robot capture pose (eye-in-hand only) ----------------------------------------------
 
     def _build_capture_pose_group_box(self) -> QGroupBox:
+        # Kept to one line on purpose; the conditions and caveats are on the buttons' tooltips
+        # and in this module's docstring rather than crowding the panel.
         hint_label = QLabel(
-            "The robot pose in base frame at the moment the frame was captured - in whichever "
-            "frame Pose Reference selects below, not a fixed one. Read off the robot on every "
-            "Eye-In-Hand capture in the Line Tracing tab, since the robot stands still for the "
-            "capture and its pose right then is the capture pose; nothing is recorded if the "
-            "robot is not connected. Read From Robot repeats that read, which is only valid "
-            "while the robot still stands where it stood for the capture. Move To Capture Pose "
-            "sends it back there."
+            "Robot pose at capture time, in the frame Pose Reference selects - read off the robot "
+            "on every Eye-In-Hand capture. Move To Capture Pose sends the robot back there."
         )
         hint_label.setWordWrap(True)
         hint_label.setStyleSheet(f"color: {TEXT_MUTED};")
@@ -217,8 +214,18 @@ class CalibrationPanel(QWidget):
         self.capture_pose_source_field.setReadOnly(True)
         self.capture_pose_source_field.setPlaceholderText("(not set)")
         self.read_capture_pose_button = QPushButton("Read From Robot")
+        self.read_capture_pose_button.setToolTip(
+            "Read the robot's current pose as the capture pose.\n"
+            "Only valid while the robot still stands where it stood for the capture -\n"
+            "move it first and every waypoint comes out transformed by the difference.\n"
+            "Captures do this on their own; this is for re-reading it by hand."
+        )
         self.read_capture_pose_button.clicked.connect(self.on_read_capture_pose_clicked)
         self.move_to_capture_pose_button = QPushButton("Move To Capture Pose")
+        self.move_to_capture_pose_button.setToolTip(
+            "Send the robot back to the recorded capture pose (moveJ, so not a straight line).\n"
+            "Asks for confirmation with the target coordinates first."
+        )
         self.move_to_capture_pose_button.setEnabled(False)
         self.move_to_capture_pose_button.clicked.connect(self.on_move_to_capture_pose_clicked)
 
