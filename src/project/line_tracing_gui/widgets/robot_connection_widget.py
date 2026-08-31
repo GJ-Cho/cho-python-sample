@@ -12,7 +12,7 @@ moves) but talks directly to RobotControlURRTDE.
 
 import queue
 import threading
-from typing import Optional
+from typing import Optional, Tuple
 
 import numpy as np
 from PyQt5.QtCore import QTimer, pyqtSignal
@@ -246,6 +246,33 @@ class RobotConnectionWidget(QWidget):
         if self.connected:
             self.disconnect_robot()
         self.on_connect_clicked()
+
+    def move_to_pose(self, pose: TransformationMatrix) -> Tuple[bool, str]:
+        """Blocking moveJ to `pose`. Returns (succeeded, message).
+
+        Lives here rather than in the calling widget so the poll/move interlock stays in
+        one place - see pause_polling for why the two must not overlap.
+        """
+        if self.robot_control is None:
+            return False, "Robot is not connected."
+
+        result_queue: "queue.Queue" = queue.Queue()
+
+        def _run() -> None:
+            assert self.robot_control is not None
+            try:
+                self.robot_control.move_j(self.robot_control.get_custom_target(pose))
+                result_queue.put((True, "Moved to the pose."))
+            except Exception as ex:  # pylint: disable=broad-except
+                result_queue.put((False, str(ex)))
+
+        self.pause_polling()
+        move_thread = threading.Thread(target=_run)
+        move_thread.start()
+        while move_thread.is_alive():
+            QApplication.processEvents()
+        self.resume_polling()
+        return result_queue.get()
 
     def pause_polling(self) -> None:
         """Stop the periodic TCP-pose poll. Callers that run their own blocking

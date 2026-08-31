@@ -91,9 +91,16 @@ Connect / Calibration / Line Tracing 3탭 모두 동작 확인됨 (카메라 캡
 
 단, 위 실기 검증은 전부 **eye-to-hand** 기준이다. `build_waypoints`는 처음부터 `robot_pose` 인자로
 eye-in-hand를 지원했지만 GUI에서 그 값을 넣을 방법이 없어 거부하고 있었는데, Calibration 탭의
-**Robot Capture Pose** 섹션(YAML 불러오기 / 로봇에서 직접 읽기)으로 연결했다. **eye-in-hand 경로는
-아직 실기로 확인하지 않았다** — 첫 사용 시 저속으로, 3D 프리뷰에서 웨이포인트가 표면 위에 제대로
-얹히는지 먼저 확인할 것.
+**Robot Capture Pose** 섹션으로 연결했다.
+
+캡처 pose는 **캡처 시점에 자동으로 기록**한다(`TracePanel.on_capture_clicked` →
+`CalibrationPanel.record_capture_pose`). 캡처 중에는 로봇이 정지해 있으므로 그 순간의 현재 pose가 곧
+캡처 pose이고, 사용자가 타이밍을 신경 쓸 필요가 없다. 기록된 값은 되돌아갈 위치로도 쓰인다
+(**Move To Capture Pose** 버튼 → `RobotConnectionWidget.move_to_pose`). YAML 불러오기와 수동
+읽기도 남겨 두었지만, 수동 읽기는 캡처 당시 자세 그대로 서 있을 때만 유효하다.
+
+**eye-in-hand 경로는 아직 실기로 확인하지 않았다** — 첫 사용 시 저속으로, 3D 프리뷰에서 웨이포인트가
+표면 위에 제대로 얹히는지 먼저 확인할 것.
 
 ## 향후 개선 여지
 

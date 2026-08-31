@@ -10,10 +10,13 @@ section. Eye-in-hand additionally needs the robot pose at the moment the frame
 was captured - point_base = robot_pose * hand_eye_transform * point_camera - so a
 second section appears for it, and is hidden again for eye-to-hand.
 
-That capture pose can be read straight off a connected robot or loaded from a
-YAML file. Reading it off the robot is only correct while the robot is still
-standing where it stood when the frame was captured; move it first and the
-waypoints come out transformed by the difference.
+That capture pose is recorded automatically: the robot stands still while the
+frame is taken, so its pose at that moment is the capture pose, and TracePanel
+records it on every capture (see record_capture_pose). It doubles as a position
+to send the robot back to, which is what the Move To Capture Pose button does.
+It can also be read from the robot on demand or loaded from a YAML - reading on
+demand is only correct while the robot still stands where it stood for the
+capture, otherwise the waypoints come out transformed by the difference.
 
 No TCP offset UI here - the robot controller's own set_tcp handles the
 gripper tip offset (see robot/README.md), not this app.
@@ -46,6 +49,7 @@ from line_tracing_gui.config import AppConfig
 from line_tracing_gui.theme import TEXT_MUTED
 from line_tracing_gui.widgets.robot_connection_widget import RobotConnectionWidget
 
+RECORDED_AT_CAPTURE_SOURCE = "(recorded at capture)"
 READ_FROM_ROBOT_SOURCE = "(read from the robot)"
 
 
@@ -151,8 +155,8 @@ class CalibrationPanel(QWidget):
     def _build_capture_pose_group_box(self) -> QGroupBox:
         hint_label = QLabel(
             "The robot's end-effector pose in base frame at the moment the frame was captured. "
-            "Reading it from the robot is only valid while the robot still stands where it stood "
-            "for the capture."
+            "Recorded automatically on every capture in the Line Tracing tab, since the robot "
+            "stands still for it - so the value below is also where you can send the robot back to."
         )
         hint_label.setWordWrap(True)
         hint_label.setStyleSheet(f"color: {TEXT_MUTED};")
@@ -164,6 +168,9 @@ class CalibrationPanel(QWidget):
         self.load_capture_pose_button.clicked.connect(self.on_load_capture_pose_clicked)
         self.read_capture_pose_button = QPushButton("Read From Robot")
         self.read_capture_pose_button.clicked.connect(self.on_read_capture_pose_clicked)
+        self.move_to_capture_pose_button = QPushButton("Move To Capture Pose")
+        self.move_to_capture_pose_button.setEnabled(False)
+        self.move_to_capture_pose_button.clicked.connect(self.on_move_to_capture_pose_clicked)
 
         self.capture_pose_widget = PoseWidget.Robot(eye_in_hand=True, display_mode=PoseWidgetDisplayMode.Basic)
 
@@ -171,6 +178,7 @@ class CalibrationPanel(QWidget):
         source_row.addWidget(self.capture_pose_source_field, stretch=1)
         source_row.addWidget(self.load_capture_pose_button)
         source_row.addWidget(self.read_capture_pose_button)
+        source_row.addWidget(self.move_to_capture_pose_button)
 
         form_layout = QFormLayout()
         form_layout.addRow("Capture Pose", source_row)
@@ -188,6 +196,7 @@ class CalibrationPanel(QWidget):
         self.capture_pose_widget.set_transformation_matrix(pose)
         self.capture_pose_source_field.setText(source)
         self.capture_pose_is_set = True
+        self.move_to_capture_pose_button.setEnabled(True)
 
     def _load_capture_pose_from_path(self, path: Path) -> None:
         try:
@@ -208,17 +217,50 @@ class CalibrationPanel(QWidget):
             return
         self._load_capture_pose_from_path(Path(file_path))
 
-    def on_read_capture_pose_clicked(self) -> None:
+    def record_capture_pose(self, source: str = RECORDED_AT_CAPTURE_SOURCE) -> Optional[str]:
+        """Record the robot's current pose as the capture pose; returns an error, or None.
+
+        TracePanel calls this from on_capture_clicked: the robot stands still while the frame
+        is taken, so its pose right then *is* the capture pose. Recording it there means
+        nothing has to be entered by hand, and it doubles as a position to send the robot
+        back to later (see on_move_to_capture_pose_clicked).
+        """
         robot_control = self.robot_connection_widget.robot_control
         if robot_control is None:
-            QMessageBox.warning(self, "Robot Capture Pose", "Robot is not connected.")
-            return
+            return "Robot is not connected."
         try:
             target = robot_control.get_pose()
         except Exception as ex:  # pylint: disable=broad-except
-            QMessageBox.warning(self, "Robot Capture Pose", f"Failed to read the pose: {ex}")
+            return f"Failed to read the pose: {ex}"
+        self._set_capture_pose(target.pose, source)
+        return None
+
+    def on_read_capture_pose_clicked(self) -> None:
+        error_message = self.record_capture_pose(READ_FROM_ROBOT_SOURCE)
+        if error_message is not None:
+            QMessageBox.warning(self, "Robot Capture Pose", error_message)
+
+    def on_move_to_capture_pose_clicked(self) -> None:
+        pose = self.get_capture_pose()
+        if pose is None:
             return
-        self._set_capture_pose(target.pose, READ_FROM_ROBOT_SOURCE)
+        translation = pose.translation
+        confirm = QMessageBox.question(
+            self,
+            "Move To Capture Pose",
+            "The robot will move (moveJ) to the recorded capture pose:\n"
+            f"X={translation[0]:.1f} Y={translation[1]:.1f} Z={translation[2]:.1f} mm\n\n"
+            "Make sure the path there is clear. Continue?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if confirm != QMessageBox.Yes:
+            return
+        success, message = self.robot_connection_widget.move_to_pose(pose)
+        if success:
+            QMessageBox.information(self, "Move To Capture Pose", message)
+        else:
+            QMessageBox.warning(self, "Move To Capture Pose", message)
 
     # --- Shared ------------------------------------------------------------------------------
 

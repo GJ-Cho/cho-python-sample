@@ -41,7 +41,7 @@ class CameraPanel(QWidget):
         self.live_2d_widget.setMinimumHeight(300)
         self.live_2d_widget.camera_disconnected.connect(self.on_camera_disconnected)
 
-        group_box = QGroupBox("Camera (Zivid 2+ MR130)")
+        group_box = QGroupBox("Camera")
         group_layout = QVBoxLayout()
         group_layout.addWidget(self.buttons)
         group_layout.addWidget(self.live_2d_widget)

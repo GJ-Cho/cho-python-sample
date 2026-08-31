@@ -310,6 +310,21 @@ class TracePanel(QWidget):
         self.point_cloud_rgb = rgba
         self.waypoints = []
 
+        # Eye-in-hand turns a camera-frame point into a base-frame one through the robot's
+        # pose at capture time, and the robot stood still for the capture we just took - so
+        # its pose right now is that pose. Recording it here means nothing has to be entered
+        # by hand, and the Calibration tab can send the robot back to it later.
+        if self.calibration_panel.get_eye_in_hand():
+            error_message = self.calibration_panel.record_capture_pose()
+            if error_message is not None:
+                QMessageBox.warning(
+                    self,
+                    "Capture",
+                    f"Captured, but the robot pose at capture time could not be recorded:\n{error_message}\n\n"
+                    "Eye-In-Hand needs it to generate waypoints - connect the robot and capture again,\n"
+                    "or set it under Robot Capture Pose in the Calibration tab.",
+                )
+
         qimage = QImage(rgba.data, rgba.shape[1], rgba.shape[0], QImage.Format_RGBA8888)
         self.image_viewer.set_pixmap(QPixmap.fromImage(qimage), reset_zoom=True)
         self.pointcloud_viewer.show_point_cloud(self.point_cloud_xyz, self.point_cloud_rgb)
