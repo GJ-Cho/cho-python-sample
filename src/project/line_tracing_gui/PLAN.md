@@ -103,20 +103,42 @@ eye-in-hand를 지원했지만 GUI에서 그 값을 넣을 방법이 없어 거�
 
 결정 #2에 따라 이 프로젝트는 그리퍼 팁을 **0이 아닌 TCP**로 컨트롤러에 설정해 둔다. 그런데
 `RobotControlURRTDE.get_pose()`는 `getActualTCPPose()`, 즉 그 TCP가 **적용된** `base_T_tcp`를
-돌려준다. hand-eye 캘리브레이션을 플랜지(6축 끝) 기준으로 했다면 `hand_eye = flange_T_camera`이므로,
-여기에 `base_T_tcp`를 곱하면 결과가 **정확히 TCP 오프셋만큼 어긋난다**. 뾰족한 그리퍼라 이 오차는
-수십 mm가 될 수 있다.
+돌려준다. 프레임 체인은 이렇게 생겼다:
 
-- `get_flange_pose()`가 `base_T_tcp * (flange_T_tcp)^-1`로 오프셋을 되돌린다.
+```
+base ──→ flange ──→ tcp ──→ camera ──→ point
+              └ flange_T_tcp ┘
+```
+
+`flange_T_tcp`(= 팬던트에 설정한 TCP 오프셋)는 체인상 flange와 camera **사이에** 있다. 그래서
+캘리브레이션이 TCP 기준(`hand_eye = tcp_T_camera`)이면 필요한 것은 `base_T_tcp`이고,
+
+```
+base_T_point = base_T_tcp     · tcp_T_camera · camera_T_point
+             = base_T_flange · flange_T_tcp · tcp_T_camera · camera_T_point
+```
+
+두 줄은 `base_T_tcp = base_T_flange · flange_T_tcp`를 대입한 **같은 식**이다(항이 추가된 게 아니다).
+여기서 `base_T_flange`를 넣으면 `flange_T_tcp` 링크가 빠져 체인이 끊어진다.
+
+- `get_flange_pose()`가 `base_T_tcp * flange_T_tcp^-1`로 오프셋을 되돌린다.
 - Calibration 탭의 **Pose Reference**(Flange / TCP)로 어느 규약인지 고른다. 기본값은 Flange.
 - **판단 기준**: hand-eye 캘리브레이션을 돌릴 때 팬던트에 TCP가 활성이었다면 기록된 로봇 pose가
   TCP pose이므로 → **TCP**. TCP가 0이었다면 → **Flange**. `hand_eye`와 `robot_pose`가 같은 프레임
   규약이어야 한다는 것이 요점이고, 어느 쪽이 "옳다"가 아니다.
-- **틀렸을 때의 증상**: `P_correct = (base_T_flange · O · base_T_flange⁻¹) · P_mine`, 즉 경로 전체가
-  TCP 오프셋만큼 강체 이동한다. 팁이 그 이동된 경로를 따라가므로 **원래 라인 위를 플랜지가 지나가는
-  것처럼 보인다**. (실기에서 실제로 관측됨)
-- 반대로 **Move To Capture Pose**는 `move_j`가 TCP 타깃을 받으므로 flange pose에 오프셋을 **다시
-  곱해서** 보낸다. 안 그러면 TCP 오프셋만큼 못 미치는 곳으로 간다.
+- **틀렸을 때의 증상**: 오차를 base 프레임의 변환 하나로 정리하면
+
+  ```
+  base_T_error = base_T_flange · flange_T_tcp · base_T_flange^-1
+  base_T_point = base_T_error · base_T_point_wrong
+  ```
+
+  `base_T_flange`(캡처 pose)가 경로 전체에 대해 고정값이므로 같은 변환이 모든 웨이포인트에 걸린다 —
+  **경로가 찌그러지지 않고 통째로 `flange_T_tcp`만큼 강체 이동**한다. 팁이 그 이동된 경로를 따라가므로
+  **원래 라인 위를 플랜지가 지나가는 것처럼 보인다**. (실기에서 실제로 관측됨. `flange_T_tcp`에 회전이
+  있으면 밀림에 더해 캡처 pose를 중심으로 한 회전까지 생긴다.)
+- 반대로 **Move To Capture Pose**는 `move_j`가 TCP 타깃을 받으므로 flange pose에 `flange_T_tcp`를
+  **다시 곱해서** 보낸다. 안 그러면 TCP 오프셋만큼 못 미치는 곳으로 간다.
 - Pose Reference를 바꾸면 이미 기록된 pose는 다른 규약의 값이므로 지운다.
 
 eye-to-hand는 `robot_pose`를 아예 쓰지 않으므로(`camera_to_base = hand_eye`) 이 문제가 없다. 실기
