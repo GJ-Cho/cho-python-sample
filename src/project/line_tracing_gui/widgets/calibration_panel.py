@@ -179,9 +179,13 @@ class CalibrationPanel(QWidget):
 
     def _build_capture_pose_group_box(self) -> QGroupBox:
         hint_label = QLabel(
-            "The robot's end-effector pose in base frame at the moment the frame was captured. "
-            "Read off the robot on every capture in the Line Tracing tab, since the robot stands "
-            "still for it - so the value below is also where you can send the robot back to."
+            "The robot pose in base frame at the moment the frame was captured - in whichever "
+            "frame Pose Reference selects below, not a fixed one. Read off the robot on every "
+            "Eye-In-Hand capture in the Line Tracing tab, since the robot stands still for the "
+            "capture and its pose right then is the capture pose; nothing is recorded if the "
+            "robot is not connected. Read From Robot repeats that read, which is only valid "
+            "while the robot still stands where it stood for the capture. Move To Capture Pose "
+            "sends it back there."
         )
         hint_label.setWordWrap(True)
         hint_label.setStyleSheet(f"color: {TEXT_MUTED};")
