@@ -1,6 +1,6 @@
 # Line Tracing GUI
 
-UR3e(뾰족한 그리퍼) + Zivid2+ MR130(eye-to-hand, 고정 거치) 조합으로, 캡처한 2D 이미지 위에 그린 라인을
+UR3e(뾰족한 그리퍼) + Zivid 3D 카메라 조합으로, 캡처한 2D 이미지 위에 그린 라인을
 실제 3D 표면에 수직으로 접촉하며 따라가게 하는 PyQt5 GUI입니다.
 
 Zivid 공식 `zivid-python-samples`의 Hand-Eye GUI와 같은 스택/관례를 따릅니다: PyQt5, `zividsamples`
@@ -16,7 +16,7 @@ Zivid 공식 `zivid-python-samples`의 Hand-Eye GUI와 같은 스택/관례를 �
 - **TCP 오프셋**(그리퍼 팁 위치)은 로봇 컨트롤러에서 설정합니다: PolyScope Installation → TCP
   Configuration (미터 단위). GUI의 Connect 탭에서 현재 값을 조회/수정할 수도 있습니다.
 - **카메라**: Zivid2+ MR130, hand-eye 캘리브레이션 결과(YAML)가 필요합니다. eye-to-hand(고정 거치)와
-  eye-in-hand(플랜지 장착)를 모두 지원하지만, 실기 검증은 eye-to-hand로만 했습니다.
+  eye-in-hand(플랜지 장착)를 모두 지원하며, 둘 다 실기 검증했습니다.
 
 ## 실행
 
@@ -58,7 +58,13 @@ python src/project/line_tracing_gui/main.py      # 리포 루트에서
 python -m line_tracing_gui._dev_test_waypoint_builder
 python -m line_tracing_gui._dev_test_pointcloud_preview
 python -m line_tracing_gui._dev_test_drawable_viewer
+python -m line_tracing_gui._dev_test_eye_to_hand_regression
 ```
+
+마지막 것은 **eye-to-hand 회귀 가드**입니다. eye-to-hand가 먼저 실기 검증됐고 eye-in-hand를 그 위에
+얹었기 때문에, eye-in-hand 쪽 수정이 eye-to-hand 웨이포인트를 조용히 움직일 수 있습니다. 이 테스트가
+`camera_to_base`가 정확히 hand-eye 변환뿐임을 불변식으로 확인하고, 샘플 점군 기준 golden 값과도
+대조합니다. eye-in-hand를 손댄 뒤에는 한 번 돌려보세요.
 
 ## 안전
 

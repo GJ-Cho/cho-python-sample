@@ -89,15 +89,17 @@ Connect / Calibration / Line Tracing 3탭 모두 동작 확인됨 (카메라 캡
 및 3D 프리뷰, 홈 포지션, E-stop/protective-stop 감지 및 재연결, 실제 로봇 트레이싱 실행까지 실기 검증
 완료).
 
-단, 위 실기 검증은 전부 **eye-to-hand** 기준이다. `build_waypoints`는 처음부터 `robot_pose` 인자로
-eye-in-hand를 지원했지만 GUI에서 그 값을 넣을 방법이 없어 거부하고 있었는데, Calibration 탭의
-**Robot Capture Pose** 섹션으로 연결했다.
+**eye-in-hand도 실기 검증 완료.** `build_waypoints`는 처음부터 `robot_pose` 인자로 eye-in-hand를
+지원했지만 GUI에서 그 값을 넣을 방법이 없어 거부하고 있었는데, Calibration 탭의 **Robot Capture Pose**
+섹션으로 연결했고 실제 로봇에서 팁이 그린 라인을 따라가는 것까지 확인했다(Pose Reference = Flange,
+플랜지 기준 hand-eye).
 
 캡처 pose는 **캡처 시점에 자동으로 기록**한다(`TracePanel.on_capture_clicked` →
 `CalibrationPanel.record_capture_pose`). 캡처 중에는 로봇이 정지해 있으므로 그 순간의 현재 pose가 곧
 캡처 pose이고, 사용자가 타이밍을 신경 쓸 필요가 없다. 기록된 값은 되돌아갈 위치로도 쓰인다
-(**Move To Capture Pose** 버튼 → `RobotConnectionWidget.move_to_pose`). YAML 불러오기와 수동
-읽기도 남겨 두었지만, 수동 읽기는 캡처 당시 자세 그대로 서 있을 때만 유효하다.
+(**Move To Capture Pose** 버튼 → `RobotConnectionWidget.move_to_pose`). 캡처 pose는 파일로
+불러오지 않는다 — 항상 로봇에서 읽는다. `Read From Robot`으로 수동 재읽기도 가능하지만, 캡처 당시
+자세 그대로 서 있을 때만 유효하다.
 
 ### eye-in-hand의 함정: 로봇이 알려주는 pose는 TCP pose다
 
@@ -141,8 +143,8 @@ base_T_point = base_T_tcp     · tcp_T_camera · camera_T_point
   **다시 곱해서** 보낸다. 안 그러면 TCP 오프셋만큼 못 미치는 곳으로 간다.
 - Pose Reference를 바꾸면 이미 기록된 pose는 다른 규약의 값이므로 지운다.
 
-eye-to-hand는 `robot_pose`를 아예 쓰지 않으므로(`camera_to_base = hand_eye`) 이 문제가 없다. 실기
-검증이 전부 eye-to-hand였던 탓에 드러나지 않았던 부분이다.
+eye-to-hand는 `robot_pose`를 아예 쓰지 않으므로(`camera_to_base = hand_eye`) 이 문제가 없다. 초기
+실기 검증이 eye-to-hand뿐이었던 탓에 eye-in-hand를 붙일 때까지 드러나지 않았던 부분이다.
 
 ### 3D 프리뷰로는 이 부류의 오류를 검증할 수 없다
 
@@ -158,8 +160,9 @@ eye-to-hand는 `robot_pose`를 아예 쓰지 않으므로(`camera_to_base = hand
   점 구름의 그 지점에 찍히는지 보면 된다. TCP 오프셋만큼 벗어나 있으면 Pose Reference가 틀린 것이다.
 - 웨이포인트 개수 옆에 어떤 체인을 썼는지 표시된다(`_transform_chain_description`).
 
-**eye-in-hand 경로는 아직 실기로 확인하지 않았다** — 첫 사용 시 저속으로, 위의 노란 점 대조로 Pose
-Reference부터 확정한 뒤 진행할 것.
+eye-in-hand 경로는 실기 검증됐다. 다만 **새 캘리브레이션이나 새 표면으로 처음 쓸 때는** 위의 노란 점
+대조로 Pose Reference부터 확정한 뒤 저속으로 진행할 것 — 규약이 틀리면 경로가 TCP 오프셋만큼 통째로
+밀리고, 그건 GUI 어디에서도 보이지 않는다.
 
 ### 실기로 측정한 TCP 동작
 
