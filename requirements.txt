@@ -8,5 +8,7 @@ pyyaml
 matplotlib
 pyqt5
 pyqtgraph
+pyopengl
 nptyping
 robodk
+ur_rtde
