@@ -202,5 +202,46 @@ command 측 TCP를 컨트롤러 값에 자동으로 맞추려고 `getForwardKine
 
 ## 향후 개선 여지
 
+### 1. 그린 라인을 프로젝터로 표면에 투사 (사용자 승인 단계)
+
+워크플로: **라인 그리기 → 3D 확인 → 프로젝팅 → 사용자 승인 → 실행**. 계산된 웨이포인트가 실제 표면의
+의도한 위치에 있는지 **로봇을 움직이기 전에 눈으로** 확인할 수 있다. 3D 프리뷰만으로는
+`camera_to_base` 체인 오류를 절대 잡을 수 없으므로(위 "3D 프리뷰로는 이 부류의 오류를 검증할 수 없다"
+참조) 이 단계의 가치가 크다. 단, 투사도 카메라 프레임에서 이뤄지므로 **hand-eye 체인은 검증하지
+못하고**, 픽셀→3D 대응만 검증한다.
+
+설치된 API로 바로 가능하다:
+
+- `zivid.projection.projector_resolution(camera)` — 투사 이미지 크기
+- `zivid.projection.pixels_from_3d_points(camera, points)` — 카메라 프레임 3D 점 → 프로젝터 픽셀
+- `zivid.projection.show_image_bgra(camera, image)` → `ProjectedImage` (컨텍스트 매니저)
+
+즉 `build_waypoints`가 쓰는 카메라 프레임 점들을 그대로 넘겨 프로젝터 픽셀로 변환하고, 그 위에 선을
+그려 투사하면 된다. `zividsamples.gui.buttons_widget`에 이미 `QGroupBox("Projection")` +
+`project_button` 패턴이 있어 UI도 그 형태를 따를 수 있다.
+
+### 2. 실행 전 웨이포인트 도달성 검사
+
+전체 경로를 움직이기 전에 각 웨이포인트가 로봇이 도달 가능한 자세인지 미리 확인한다. 지금은
+`move_path` 중간에 실패하면 이미 절반쯤 움직인 상태가 되므로, 사전 검사가 훨씬 안전하다.
+
+`rtde_control`에 필요한 API가 전부 있다:
+
+- `getInverseKinematicsHasSolution(pose, qnear)` — IK 해 존재 여부. `move_j`가 쓰는
+  `getInverseKinematics`와 같은 계열이므로 결과가 일관된다.
+- `isPoseWithinSafetyLimits(pose)` / `isJointsWithinSafetyLimits(q)` — safety 설정 위반 여부.
+
+웨이포인트별로 통과/실패를 표시하고, 실패한 구간을 3D 뷰에서 강조하면 라인을 다시 그리거나 캡처
+위치를 옮기는 판단이 쉬워진다. 접근/후퇴 pose와 홈도 같은 검사 대상이다(실기에서 홈 이동이
+`moveJ (to joints) failed`로 거부된 사례가 있었다).
+
+### 3. 그 외
+
 - 속도/가속도/블렌드 값을 더 공격적으로(빠르게) 튜닝.
 - 전체 시퀀스(홈 → 접근 → 트레이싱 → 후퇴 → 홈)를 다양한 실제 표면으로 반복 검증.
+- 로봇/카메라 연결·재연결·에러 리셋의 예외 처리 보강. 특히 `moveJ`/`movePath`가 `False`를 반환할 때
+  `isProgramRunning()`, 정지 상태, safety limit 위반 여부를 함께 보여주면 원인 파악이 즉시 된다 —
+  현재 메시지는 "robot may have refused or stopped the motion"으로 원인을 구분하지 못한다.
+- 웨이포인트 리샘플링을 픽셀 호길이 대신 실제 3D 거리 기준으로. 현재는 근사여서 목표 5 mm인데
+  실측 최소 간격이 3.4 mm까지 내려가고 절반 가까이가 `_enforce_minimum_spacing`에서 버려지는 경우가
+  관측됐다.
