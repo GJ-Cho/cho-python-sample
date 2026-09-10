@@ -29,6 +29,38 @@ DEFAULT_JOINT_ACCELERATION = 0.3  # rad/s^2
 
 IS_MOVING_SPEED_THRESHOLD = 1e-3  # m/s and rad/s, on the combined 6-vector norm
 
+# Numeric robot/safety mode values reported by RTDE, from Universal Robots' RTDE guide
+# ("Real-Time Data Exchange (RTDE) Guide", robot_mode / safety_mode fields). Only used to
+# turn a bare integer into readable text in describe_motion_failure(); an unrecognized
+# value degrades to "unknown (<n>)" rather than failing.
+ROBOT_MODE_NAMES = {
+    -1: "no controller",
+    0: "disconnected",
+    1: "confirm safety",
+    2: "booting",
+    3: "power off",
+    4: "power on",
+    5: "idle",
+    6: "backdrive",
+    7: "running",
+    8: "updating firmware",
+}
+SAFETY_MODE_NAMES = {
+    1: "normal",
+    2: "reduced",
+    3: "protective stop",
+    4: "recovery",
+    5: "safeguard stop",
+    6: "system emergency stop",
+    7: "robot emergency stop",
+    8: "violation",
+    9: "fault",
+    10: "validate joint id",
+    11: "undefined safety mode",
+    12: "automatic mode safeguard stop",
+    13: "system three position enabling stop",
+}
+
 
 class SimpleRobotConfiguration:
     """Minimal duck-typed stand-in for zividsamples' RobotConfiguration.
@@ -128,6 +160,53 @@ class RobotControlURRTDE(RobotControl):
         if not success:
             raise RuntimeError("setTcp failed.")
 
+    # --- Kinematics / safety queries (no motion) ------------------------------------------
+    #
+    # Used by robot.reachability to vet a whole path before any of it is executed. All three
+    # resolve against the controller's currently active TCP - the same frame the waypoints are
+    # expressed in (the TCP offset lives on the controller, not in this code; see robot/README.md),
+    # so no offset conversion is needed here.
+
+    def get_inverse_kinematics(
+        self, pose: TransformationMatrix, qnear: Optional[List[float]] = None
+    ) -> List[float]:
+        """Joint angles (rad) that put the TCP at `pose`. Prefer passing `qnear` (the joint
+        positions the robot will actually be in when it goes there) - IK otherwise resolves
+        against the *current* joint positions, which can pick a different arm configuration
+        than the one the robot will really be in mid-path.
+
+        Note this returns a solution even when the pose is out of reach; call
+        has_inverse_kinematics_solution() first to find that out.
+        """
+        self._require_connected()
+        assert self.rtde_control is not None
+        return list(self.rtde_control.getInverseKinematics(_pose_to_rtde(pose), list(qnear) if qnear else []))
+
+    def has_inverse_kinematics_solution(
+        self, pose: TransformationMatrix, qnear: Optional[List[float]] = None
+    ) -> bool:
+        """Whether the arm can reach `pose` at all. Same call family as get_inverse_kinematics
+        (and therefore as move_j), so a pose that passes here is one move_j can solve."""
+        self._require_connected()
+        assert self.rtde_control is not None
+        return bool(
+            self.rtde_control.getInverseKinematicsHasSolution(_pose_to_rtde(pose), list(qnear) if qnear else [])
+        )
+
+    def is_pose_within_safety_limits(self, pose: TransformationMatrix) -> bool:
+        """Whether `pose` respects the safety planes/boundaries configured on the pendant.
+        Independent of reachability - a pose can be perfectly solvable and still sit outside
+        a configured safety plane."""
+        self._require_connected()
+        assert self.rtde_control is not None
+        return bool(self.rtde_control.isPoseWithinSafetyLimits(_pose_to_rtde(pose)))
+
+    def is_joints_within_safety_limits(self, joint_positions: List[float]) -> bool:
+        """Whether the given joint angles (rad) respect the configured joint range limits."""
+        self._require_connected()
+        assert self.rtde_control is not None
+        return bool(self.rtde_control.isJointsWithinSafetyLimits(list(joint_positions)))
+
     def is_emergency_stopped(self) -> bool:
         self._require_connected()
         assert self.rtde_receive is not None
@@ -150,6 +229,50 @@ class RobotControlURRTDE(RobotControl):
             and self.rtde_receive is not None
             and self.rtde_receive.isConnected()
         )
+
+    def describe_motion_failure(self) -> str:
+        """Why a move just returned False, as a short human-readable clause.
+
+        moveL/moveJ/movePath only report a bare boolean, so without this every failure
+        reads the same regardless of cause. The checks are ordered by how often they are
+        the real cause: a dead RTDE control script (isProgramRunning() False) is the top
+        candidate - it is what a `moveJ (to joints) failed` on an otherwise healthy robot
+        has looked like here - followed by the stops, then the raw modes.
+
+        Never raises: this runs on the failure path, where a second exception would hide
+        the original one.
+        """
+        try:
+            self._require_connected()
+            assert self.rtde_control is not None and self.rtde_receive is not None
+            if not self.rtde_control.isConnected() or not self.rtde_receive.isConnected():
+                return "the RTDE connection has dropped"
+            if not self.rtde_control.isProgramRunning():
+                return (
+                    "the RTDE control script is not running on the controller - reconnect, and check "
+                    "that the robot is still in Remote Control mode"
+                )
+            if self.rtde_receive.isEmergencyStopped():
+                return "the robot is emergency stopped"
+            if self.rtde_receive.isProtectiveStopped():
+                return "the robot is protective stopped - clear it on the pendant before retrying"
+            robot_mode = int(self.rtde_receive.getRobotMode())
+            safety_mode = int(self.rtde_receive.getSafetyMode())
+            robot_mode_name = ROBOT_MODE_NAMES.get(robot_mode, f"unknown ({robot_mode})")
+            safety_mode_name = SAFETY_MODE_NAMES.get(safety_mode, f"unknown ({safety_mode})")
+            if robot_mode != 7:  # 7 = running; anything else cannot execute motion
+                return f"the robot is not running (robot mode: {robot_mode_name}, safety mode: {safety_mode_name})"
+            if safety_mode != 1:  # 1 = normal
+                return f"the safety mode is {safety_mode_name}, not normal"
+            return (
+                f"the robot reports itself healthy (robot mode: {robot_mode_name}, safety mode: "
+                f"{safety_mode_name}) - the target was most likely unreachable or outside a safety limit"
+            )
+        except Exception as ex:  # pylint: disable=broad-except
+            return f"the cause could not be read back from the robot ({ex})"
+
+    def _motion_failed(self, what: str) -> RuntimeError:
+        return RuntimeError(f"{what} failed: {self.describe_motion_failure()}.")
 
     def is_home(self) -> bool:
         # Line tracing has no fixed "home" target; not meaningful here.
@@ -181,7 +304,7 @@ class RobotControlURRTDE(RobotControl):
         assert self.rtde_control is not None
         success = self.rtde_control.moveL(_pose_to_rtde(target.pose), speed, acceleration, asynchronous)
         if not success:
-            raise RuntimeError("moveL failed (robot may have refused or stopped the motion).")
+            raise self._motion_failed("moveL")
 
     def move_j(
         self,
@@ -196,7 +319,7 @@ class RobotControlURRTDE(RobotControl):
         q = self.rtde_control.getInverseKinematics(_pose_to_rtde(target.pose), current_q)
         success = self.rtde_control.moveJ(q, speed, acceleration, asynchronous)
         if not success:
-            raise RuntimeError("moveJ failed (robot may have refused/stopped the motion, or no IK solution).")
+            raise self._motion_failed("moveJ")
 
     def move_to_joints(
         self,
@@ -213,7 +336,7 @@ class RobotControlURRTDE(RobotControl):
         assert self.rtde_control is not None
         success = self.rtde_control.moveJ(list(joint_positions), speed, acceleration, asynchronous)
         if not success:
-            raise RuntimeError("moveJ (to joints) failed (robot may have refused or stopped the motion).")
+            raise self._motion_failed("moveJ (to joints)")
 
     def move_path(
         self,
@@ -245,7 +368,7 @@ class RobotControlURRTDE(RobotControl):
             )
         success = self.rtde_control.movePath(path, asynchronous)
         if not success:
-            raise RuntimeError("movePath failed (robot may have refused or stopped the motion).")
+            raise self._motion_failed("movePath")
 
     def stop(self, deceleration: float = 10.0) -> None:
         if self.rtde_control is not None:

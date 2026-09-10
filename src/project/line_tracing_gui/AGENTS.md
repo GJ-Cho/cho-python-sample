@@ -23,8 +23,20 @@ UR3e(뾰족한 그리퍼) + Zivid 3D 카메라로, 캡처한 2D 이미지 위에
 
 ## 작업 규칙
 
-- Zivid/`zividsamples` API 이름을 추측하지 않는다. 실제 설치된 site-packages 버전(`modules/zividsamples`)을
-  확인하거나 불확실하면 사용자에게 묻는다.
+- Zivid/`zividsamples` API 이름을 추측하지 않는다. **설치된 site-packages 패키지가 유일한 기준**이고,
+  불확실하면 사용자에게 묻는다.
+- **리포의 `modules/zividsamples`를 보고 판단하지 않는다.** 그건 낡은 평면 구조 사본이고 실행되지 않는다.
+  실제로 import되는 것은 `C:/Zivid/zivid-python-samples/modules`에서 설치된 신구조 패키지다
+  (`pip show`가 아니라 `site-packages/zivid_samples_extra_modules-*.dist-info/direct_url.json`에서 확인).
+  두 구조가 다르다 — 예: `gui/cv2_handler.py`(리포) vs `gui/widgets/cv2_handler.py`(설치본). 리포의
+  `modules/`로 설치하면 이 GUI가 쓰는 import 7개 중 6개가 사라진다.
+- **`cv2`를 모듈 최상단에서 import하지 않는다.** `ZividQtApplication.__init__`이
+  `"cv2" in sys.modules`면 예외를 던진다("conflicting versions of Qt on some platforms").
+  `main.py`는 앱을 만들기 **전에** `main_window` → `trace_panel` → 그 아래 모듈을 전부 import하므로,
+  최상단 `import cv2` 하나로 GUI가 시작조차 못 한다. 대신 `zividsamples.gui.widgets.cv2_handler`의
+  `CV2Handler`를 쓴다 — `__init__` 안에서 cv2를 지연 import하므로, **그리는 시점에 인스턴스를 만들면**
+  앱 생성 이후가 된다. `geometry/projection.py`가 그 패턴의 예이고,
+  `_dev_test_projection`이 회귀를 막는다.
 - TCP 오프셋(그리퍼 팁 위치)은 **로봇 컨트롤러**(PolyScope Installation → TCP Configuration)에서만
   설정한다. `waypoint_builder.py`나 다른 소프트웨어 코드에서 다시 곱하면 오프셋이 중복 적용된다.
 - 웨이포인트 방향(회전) 계산은 그리퍼가 **툴 Z축 둘레로 회전 대칭**이라는 전제에 의존한다
@@ -35,7 +47,9 @@ UR3e(뾰족한 그리퍼) + Zivid 3D 카메라로, 캡처한 2D 이미지 위에
 - 색·폰트·여백은 `theme.py`에만 둔다. 위젯 코드에 `"green"` 같은 raw 색을 쓰지 말고 `theme.py`의 상수를
   import한다. 그리고 `zividsamples`(설치된 site-packages 패키지)의 스타일시트는 절대 수정하지 않는다 —
   다른 샘플 GUI가 공유하는 코드다. `theme.py`가 그 뒤에 QSS를 덧붙여 덮어쓴다.
-- 주석과 문서(`PLAN.md`, `README.md`, 이 파일)는 한국어, 코드 식별자와 API 이름은 영어.
+- **코드 주석과 docstring은 영어**, **문서(`PLAN.md`, `README.md`, 이 파일)는 한국어**로 쓴다.
+  코드 식별자와 API 이름은 당연히 영어. `.py` 파일에는 한글이 한 자도 없는 것이 현재 상태이고,
+  그대로 유지한다 — 리포 공개용이며 `zividsamples`(영어)와 같은 파일에서 읽히기 때문이다.
 - **GUI에 표시되는 문자열은 영어**로 쓴다 — 버튼/라벨/탭 제목/툴팁/`QMessageBox`/상태 메시지 전부. 사내 데모
   및 리포 공개용이고, `zividsamples` 위젯이 자체적으로 제공하는 라벨(`Connect`, `Capture` 등)과 섞이면
   한 화면에 두 언어가 나란히 놓인다. 용어는 Zivid Studio 표기를 우선한다(예: `Zivid 2+ MR130`).

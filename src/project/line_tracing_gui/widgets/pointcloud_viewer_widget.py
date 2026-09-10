@@ -35,6 +35,14 @@ AXIS_COLOR_Z = (0.35, 0.55, 1.0, 1.0)
 CURRENT_POSITION_COLOR = (1.0, 0.85, 0.1, 1.0)  # bright yellow, distinct from the path/axes
 CURRENT_POSITION_SIZE = 14.0
 
+# Reachability verdicts (see robot.reachability). Drawn as oversized markers on top of the
+# normal path markers so a handful of bad points among hundreds is still findable by eye -
+# the whole purpose of highlighting them is to answer "where do I redraw the line?".
+UNREACHABLE_COLOR = (1.0, 0.15, 0.15, 1.0)  # red: the robot cannot go here
+UNREACHABLE_MARKER_SIZE = 15.0
+WARNING_COLOR = (1.0, 0.65, 0.0, 1.0)  # amber: reachable, but a suspected configuration flip
+WARNING_MARKER_SIZE = 13.0
+
 
 class PointCloudViewerWidget(QWidget):
     def __init__(self, parent: Optional[QWidget] = None) -> None:
@@ -55,6 +63,11 @@ class PointCloudViewerWidget(QWidget):
         self._marker_item: Optional[gl.GLScatterPlotItem] = None
         self._axis_items: List[gl.GLLinePlotItem] = []
         self._current_position_item: Optional[gl.GLScatterPlotItem] = None
+        self._unreachable_item: Optional[gl.GLScatterPlotItem] = None
+        self._warning_item: Optional[gl.GLScatterPlotItem] = None
+        # Waypoint positions of the currently shown path (camera frame), kept so
+        # reachability verdicts can be drawn later by index without re-passing the poses.
+        self._waypoint_positions: Optional[np.ndarray] = None
 
         layout = QVBoxLayout()
         layout.setContentsMargins(0, 0, 0, 0)
@@ -62,14 +75,25 @@ class PointCloudViewerWidget(QWidget):
         self.setLayout(layout)
 
     def clear(self) -> None:
-        for item in (self._scatter_item, self._path_item, self._marker_item, self._current_position_item, *self._axis_items):
+        for item in (
+            self._scatter_item,
+            self._path_item,
+            self._marker_item,
+            self._current_position_item,
+            self._unreachable_item,
+            self._warning_item,
+            *self._axis_items,
+        ):
             if item is not None:
                 self.view.removeItem(item)
         self._scatter_item = None
         self._path_item = None
         self._marker_item = None
         self._current_position_item = None
+        self._unreachable_item = None
+        self._warning_item = None
         self._axis_items = []
+        self._waypoint_positions = None
 
     def show_current_position(self, position_camera_frame: np.ndarray) -> None:
         """Show/update a marker for the robot's current TCP position (camera frame),
@@ -109,9 +133,13 @@ class PointCloudViewerWidget(QWidget):
         self._path_item = None
         self._marker_item = None
         self._axis_items = []
+        # Verdicts belong to the waypoints that were just replaced, so they are dropped
+        # here rather than left pointing at indices of a path that no longer exists.
+        self.clear_reachability()
         if len(waypoints_camera_frame) < 2:
             return
-        path_points = np.array([w.translation for w in waypoints_camera_frame], dtype=np.float32)
+        self._waypoint_positions = np.array([w.translation for w in waypoints_camera_frame], dtype=np.float32)
+        path_points = self._waypoint_positions
         self._path_item = gl.GLLinePlotItem(pos=path_points, color=PATH_COLOR, width=4, antialias=True)
         self.view.addItem(self._path_item)
         self._marker_item = gl.GLScatterPlotItem(
@@ -123,6 +151,43 @@ class PointCloudViewerWidget(QWidget):
             axis_item = self._build_axis_item(waypoints_camera_frame, axis_index, color)
             self.view.addItem(axis_item)
             self._axis_items.append(axis_item)
+
+    def show_reachability(self, unreachable_indices: List[int], warned_indices: List[int]) -> None:
+        """Mark waypoints the robot cannot reach (red) and ones suspected of an arm
+        configuration flip (amber), by index into the path last passed to show_waypoints.
+
+        Indices outside the current path are ignored rather than raising: the path can be
+        regenerated between running a check and drawing its result.
+        """
+        self.clear_reachability()
+        if self._waypoint_positions is None:
+            return
+        count = self._waypoint_positions.shape[0]
+        # Red wins over amber - a waypoint the robot cannot reach at all should not be
+        # drawn as a mere warning if it somehow ends up in both lists.
+        unreachable = sorted({i for i in unreachable_indices if 0 <= i < count})
+        warned = sorted({i for i in warned_indices if 0 <= i < count} - set(unreachable))
+
+        if warned:
+            self._warning_item = gl.GLScatterPlotItem(
+                pos=self._waypoint_positions[warned], color=WARNING_COLOR, size=WARNING_MARKER_SIZE, pxMode=True
+            )
+            self.view.addItem(self._warning_item)
+        if unreachable:
+            self._unreachable_item = gl.GLScatterPlotItem(
+                pos=self._waypoint_positions[unreachable],
+                color=UNREACHABLE_COLOR,
+                size=UNREACHABLE_MARKER_SIZE,
+                pxMode=True,
+            )
+            self.view.addItem(self._unreachable_item)
+
+    def clear_reachability(self) -> None:
+        for item in (self._unreachable_item, self._warning_item):
+            if item is not None:
+                self.view.removeItem(item)
+        self._unreachable_item = None
+        self._warning_item = None
 
     def _build_axis_item(
         self, waypoints_camera_frame: List[TransformationMatrix], axis_index: int, color

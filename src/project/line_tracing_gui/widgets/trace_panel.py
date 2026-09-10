@@ -39,7 +39,15 @@ from PyQt5.QtWidgets import (
 from zividsamples.transformation_matrix import TransformationMatrix
 
 from line_tracing_gui.config import AppConfig
+from line_tracing_gui.geometry.projection import (
+    VERDICT_OK,
+    VERDICT_UNCHECKED,
+    VERDICT_UNREACHABLE,
+    VERDICT_WARNING,
+    build_projector_image,
+)
 from line_tracing_gui.geometry.waypoint_builder import DEFAULT_SAMPLE_SPACING_MM, build_waypoints
+from line_tracing_gui.robot.reachability import ReachabilityReport, check_path_reachability
 from line_tracing_gui.robot.robot_control_ur_rtde import DEFAULT_JOINT_ACCELERATION, DEFAULT_JOINT_SPEED
 from line_tracing_gui.theme import mark_as_accent, mark_as_danger
 from line_tracing_gui.widgets.calibration_panel import CalibrationPanel
@@ -70,6 +78,12 @@ EXEC_BLEND_MAX_MM = 20.0
 
 MONITOR_POLL_INTERVAL_S = 0.05
 
+# How far the robot may sit from the capture pose before the projection is treated as stale.
+# Comfortably above the arm's own repeatability and pose-read noise, and far below anything
+# that would be visible in the projected line.
+PROJECTION_POSE_TOLERANCE_MM = 1.0
+PROJECTION_POSE_TOLERANCE_DEG = 0.5
+
 
 class TracePanel(QWidget):
     # Emitted from the execution worker thread (Qt auto-queues delivery to this widget's
@@ -77,6 +91,8 @@ class TracePanel(QWidget):
     # update while a move is in progress.
     live_pose_updated = pyqtSignal(object)  # TransformationMatrix, base frame
     live_joints_updated = pyqtSignal(list)  # radians
+    # Emitted from the reachability worker thread: (steps completed, total steps).
+    reachability_progress = pyqtSignal(int, int)
 
     def __init__(
         self,
@@ -93,6 +109,12 @@ class TracePanel(QWidget):
         self.point_cloud_xyz: Optional[np.ndarray] = None
         self.point_cloud_rgb: Optional[np.ndarray] = None
         self.waypoints: List[TransformationMatrix] = []  # base frame, set by on_generate_waypoints_clicked
+        # Verdicts for exactly the waypoints above; dropped whenever they are regenerated so
+        # the 3D highlight and the projector colours can never describe a stale path.
+        self.reachability_report: Optional[ReachabilityReport] = None
+        # zivid.projection.ProjectedImage while the projector is on. Projection also stops by
+        # itself when a capture starts on the same camera, so this is cleared there too.
+        self._projected_image = None
 
         splitter = QSplitter(Qt.Horizontal)
         splitter.addWidget(self._build_2d_panel())
@@ -110,6 +132,10 @@ class TracePanel(QWidget):
         self.robot_connection_widget.actual_joints_updated.connect(self._on_joints_updated)
         self.live_pose_updated.connect(self._on_pose_updated)
         self.live_joints_updated.connect(self._on_joints_updated)
+        self.reachability_progress.connect(self._on_reachability_progress)
+        # Losing the camera kills the projection with it, and re-gaining one makes Project
+        # available again - both only show up through this signal.
+        self.camera_panel.camera_connected.connect(self._on_camera_connected)
 
         self._update_home_status_label()
 
@@ -226,6 +252,27 @@ class TracePanel(QWidget):
             "overlapping blend zones make the robot skip intermediate points and speed up abruptly."
         )
 
+        self.check_reachability_button = QPushButton("Check Reachability")
+        self.check_reachability_button.setEnabled(False)
+        self.check_reachability_button.setToolTip(
+            "Ask the controller whether every pose in the sequence (home, approach, each waypoint,\n"
+            "retreat) can actually be reached and stays inside the configured safety limits -\n"
+            "without moving the robot. Execute runs this check by itself too; this button is for\n"
+            "trying a line out before committing to it."
+        )
+        self.check_reachability_button.clicked.connect(self.on_check_reachability_clicked)
+
+        self.project_button = QPushButton("Project")
+        self.project_button.setCheckable(True)
+        self.project_button.setEnabled(False)
+        self.project_button.setToolTip(
+            "Draw the waypoint line onto the real surface with the camera's projector, so the\n"
+            "path can be checked against the physical part before the robot moves. This is the only\n"
+            "check that catches a wrong camera-to-base chain - the 3D preview maps the waypoints\n"
+            "back with the same transform used to build them, so the error cancels out there."
+        )
+        self.project_button.toggled.connect(self.on_project_toggled)
+
         self.execute_button = QPushButton("Execute")
         mark_as_accent(self.execute_button)
         self.execute_button.setEnabled(False)
@@ -233,7 +280,7 @@ class TracePanel(QWidget):
 
         self.stop_button = QPushButton("Stop")
         mark_as_danger(self.stop_button)
-        for button in (self.execute_button, self.stop_button):
+        for button in (self.check_reachability_button, self.project_button, self.execute_button, self.stop_button):
             button.setMinimumWidth(150)  # wide enough to read as the panel's main action
         self.stop_button.setEnabled(False)
         self.stop_button.clicked.connect(self.on_stop_clicked)
@@ -263,6 +310,8 @@ class TracePanel(QWidget):
         # Execute/Stop sit to the right of the settings form, in the wide empty space that
         # would otherwise be left blank next to the narrow (FieldsStayAtSizeHint) fields.
         buttons_column = QVBoxLayout()
+        buttons_column.addWidget(self.check_reachability_button)
+        buttons_column.addWidget(self.project_button)
         buttons_column.addWidget(self.execute_button)
         buttons_column.addWidget(self.stop_button)
         buttons_column.addWidget(self.execution_status_label)
@@ -295,6 +344,9 @@ class TracePanel(QWidget):
             QMessageBox.warning(self, "Capture", "Connect a camera first.")
             return
 
+        # A capture on this camera stops any projection at the SDK level, so let go of the
+        # handle here rather than leave the button latched over a projector that is already off.
+        self._stop_projection()
         self.camera_panel.stop_live_preview()
         self.camera_panel.update_capture_button_state()
 
@@ -335,6 +387,11 @@ class TracePanel(QWidget):
         self.generate_waypoints_button.setEnabled(True)
         self.status_label_2d.setText(f"Captured ({rgba.shape[1]}x{rgba.shape[0]}) - draw a line.")
         self.status_label_3d.setText("Point cloud shown - draw a line, then generate waypoints.")
+        self._update_execute_button_state()
+
+    def _on_camera_connected(self, connected: bool) -> None:
+        if not connected:
+            self._stop_projection()
         self._update_execute_button_state()
 
     def on_draw_mode_toggled(self, checked: bool) -> None:
@@ -394,6 +451,9 @@ class TracePanel(QWidget):
             return
 
         self.waypoints = result.waypoints
+        # Both the reachability verdicts and the projected line describe the previous path.
+        self.reachability_report = None
+        self._stop_projection()
         self.status_label_3d.setText(
             f"Generated {len(result.waypoints)} waypoints "
             f"(skipped {result.skipped_pixel_count}, merged {result.merged_close_waypoint_count} too close together)"
@@ -427,16 +487,35 @@ class TracePanel(QWidget):
         Eye-to-hand is the hand-eye transform alone; eye-in-hand additionally goes
         through the robot's pose at capture time. Falls back to the hand-eye transform
         when that pose is not set, so the 3D preview still draws something sensible.
+
+        The eye-in-hand test is not redundant: a capture pose recorded during an
+        eye-in-hand session stays set after switching the mount type to eye-to-hand, and
+        build_waypoints ignores it there. Without the test this would keep multiplying it
+        in, so the 3D preview and the projection would describe a path the robot is not
+        going to follow.
         """
         hand_eye_transform = self.calibration_panel.get_hand_eye_transform()
+        if not self.calibration_panel.get_eye_in_hand():
+            return hand_eye_transform
         capture_pose = self.calibration_panel.get_capture_pose()
         if capture_pose is None:
             return hand_eye_transform
         return capture_pose * hand_eye_transform
 
     def _update_execute_button_state(self) -> None:
+        # The reachability check needs exactly what execution needs - waypoints and a live
+        # robot to ask - so the two buttons share one enabling rule.
         has_waypoints = len(self.waypoints) >= 2
-        self.execute_button.setEnabled(has_waypoints and self.robot_connection_widget.connected)
+        ready = has_waypoints and self.robot_connection_widget.connected
+        self.execute_button.setEnabled(ready)
+        self.check_reachability_button.setEnabled(ready)
+        # Projection needs the camera, not the robot: it is the camera's own projector that
+        # draws, and eye-to-hand does not involve the robot's pose at all. Eye-in-hand still
+        # wants a capture pose, but that is recorded at capture time, not read live.
+        camera = self.camera_panel.camera
+        self.project_button.setEnabled(
+            has_waypoints and camera is not None and camera.state.connected
+        )
 
     def _auto_adjust_blend_spinbox(self) -> None:
         """Set the blend spinbox to a value that's safely valid for the just-generated
@@ -535,6 +614,292 @@ class TracePanel(QWidget):
         # along local -Z backs the tool away from the surface, towards the camera side.
         return TransformationMatrix(translation=np.array([0.0, 0.0, -self.approach_spinbox.value()], dtype=np.float32))
 
+    def _approach_retreat_poses(self) -> "tuple[TransformationMatrix, TransformationMatrix]":
+        """Standoff poses either side of the traced line. Shared by the reachability check
+        and by execution so the check can never vet a different pair than the one that
+        actually runs."""
+        approach_offset = self._approach_offset()
+        return self.waypoints[0] * approach_offset, self.waypoints[-1] * approach_offset
+
+    # --- Reachability check ----------------------------------------------------------------
+
+    def _on_reachability_progress(self, completed: int, total: int) -> None:
+        self.execution_status_label.setText(f"Checking... {completed}/{total}")
+
+    def _run_reachability_check(self, result_queue: "queue.Queue", **check_kwargs) -> None:
+        """Worker body. Everything it needs is passed in - it must not read widgets, which
+        belong to the GUI thread. It must also always put exactly one report on the queue:
+        the caller blocks on that queue, so a worker that dies silently would hang the GUI.
+        """
+        try:
+            report = check_path_reachability(
+                progress_callback=lambda completed, total: self.reachability_progress.emit(completed, total),
+                **check_kwargs,
+            )
+        except Exception as ex:  # pylint: disable=broad-except
+            report = ReachabilityReport(error=str(ex))
+        result_queue.put(report)
+
+    def _perform_reachability_check(
+        self, approach_pose: TransformationMatrix, retreat_pose: TransformationMatrix
+    ) -> Optional[ReachabilityReport]:
+        """Run the check on a worker thread, keeping the UI responsive, and paint the result
+        onto the 3D view. Returns None only if the robot is not connected.
+
+        The approach/retreat pair is passed in rather than derived here so the caller can hand
+        the very same objects to execution - a check that vetted a different pair than the one
+        that runs would invite trust it has not earned.
+        """
+        robot_control = self.robot_connection_widget.robot_control
+        if robot_control is None:
+            QMessageBox.warning(self, "Check Reachability", "Robot is not connected.")
+            return None
+
+        self.check_reachability_button.setEnabled(False)
+        self.execute_button.setEnabled(False)
+        self.execution_status_label.setText("Checking...")
+        # Polling and the check both talk RTDE; pausing keeps the two off each other's backs
+        # for the second or so the check takes, exactly as execution does.
+        self.robot_connection_widget.pause_polling()
+        QApplication.processEvents()
+
+        # Read every input here, on the GUI thread, and hand them over as plain values.
+        check_kwargs = {
+            "robot_control": robot_control,
+            "waypoints": list(self.waypoints),
+            "approach_pose": approach_pose,
+            "retreat_pose": retreat_pose,
+            "home_joints": self.config.home_joints(),
+        }
+
+        result_queue: "queue.Queue" = queue.Queue()
+        thread = threading.Thread(
+            target=self._run_reachability_check, args=(result_queue,), kwargs=check_kwargs
+        )
+        thread.start()
+        while thread.is_alive():
+            QApplication.processEvents()
+        report: ReachabilityReport = result_queue.get()
+
+        self.robot_connection_widget.resume_polling()
+        self.reachability_report = report
+        self._update_execute_button_state()
+        self.pointcloud_viewer.show_reachability(
+            report.failed_waypoint_indices(), report.warned_waypoint_indices()
+        )
+        self.execution_status_label.setText(report.summary())
+        return report
+
+    def on_check_reachability_clicked(self) -> None:
+        if len(self.waypoints) < 2:
+            return
+        report = self._perform_reachability_check(*self._approach_retreat_poses())
+        if report is None:
+            return
+        if report.error is not None:
+            QMessageBox.warning(self, "Check Reachability", report.summary())
+            return
+        if report.ok and not report.warnings:
+            QMessageBox.information(self, "Check Reachability", report.summary())
+            return
+        QMessageBox.warning(
+            self,
+            "Check Reachability",
+            f"{report.summary()}\n\n{report.details()}\n\n"
+            "Unreachable points are marked red in the 3D view, warnings amber. Redraw the line "
+            "clear of them, or move the robot/camera so the surface sits better inside the "
+            "working area, then generate the waypoints again.",
+        )
+
+    # --- Projector overlay -----------------------------------------------------------------
+
+    def _waypoint_verdicts(self) -> List[str]:
+        """One projector colour per waypoint, from the last reachability check.
+
+        The report is dropped whenever the waypoints are regenerated, so it either describes
+        exactly this path or is absent - there is no stale-index case to guard against here.
+        """
+        report = self.reachability_report
+        if report is None or report.error is not None:
+            return [VERDICT_UNCHECKED] * len(self.waypoints)
+        unreachable = set(report.failed_waypoint_indices())
+        warned = set(report.warned_waypoint_indices())
+        verdicts = []
+        for index in range(len(self.waypoints)):
+            if index in unreachable:
+                verdicts.append(VERDICT_UNREACHABLE)
+            elif index in warned:
+                verdicts.append(VERDICT_WARNING)
+            else:
+                verdicts.append(VERDICT_OK)
+        return verdicts
+
+    @staticmethod
+    def _pose_deviation(first: TransformationMatrix, second: TransformationMatrix) -> "tuple[float, float]":
+        """(millimetres, degrees) between two poses."""
+        translation = float(
+            np.linalg.norm(
+                np.asarray(first.translation, dtype=float) - np.asarray(second.translation, dtype=float)
+            )
+        )
+        rotation_deg = float(np.degrees((first.rotation.inv() * second.rotation).magnitude()))
+        return translation, rotation_deg
+
+    def _camera_to_base_for_projection(self) -> Optional[TransformationMatrix]:
+        """Which camera -> base chain to map the waypoints back through for projection.
+
+        Eye-to-hand has a fixed camera, so the robot's pose never enters into it. Eye-in-hand
+        moves the camera with the arm: the capture pose is the honest default (it reproduces
+        build_waypoints' own chain, so hand-eye cancels and only the pixel -> 3D
+        correspondence is under test), but if the robot has since moved, the user is asked
+        whether to go back or to project from where it stands - see geometry.projection for
+        what each of those two actually proves.
+
+        Returns None when the user cancels, or when the state needed is missing.
+        """
+        hand_eye_transform = self.calibration_panel.get_hand_eye_transform()
+        if not self.calibration_panel.get_eye_in_hand():
+            return hand_eye_transform
+
+        capture_pose = self.calibration_panel.get_capture_pose()
+        if capture_pose is None:
+            QMessageBox.warning(
+                self,
+                "Project",
+                "Eye-In-Hand needs the robot pose at capture time to know where the line is.\n"
+                "Capture again, or read the pose under Robot Capture Pose in the Calibration tab.",
+            )
+            return None
+
+        current_pose, error_message = self.calibration_panel.read_current_pose_in_reference_frame()
+        if current_pose is None:
+            # Without the current pose there is no way to tell whether the robot has moved.
+            # Projecting from the capture pose is still the right guess, but say so.
+            QMessageBox.warning(
+                self,
+                "Project",
+                f"Could not read the robot's current pose ({error_message}).\n"
+                "Projecting as if the robot were still standing where it was at capture time - "
+                "if it has moved since, the line will land in the wrong place.",
+            )
+            return capture_pose * hand_eye_transform
+
+        translation_mm, rotation_deg = self._pose_deviation(capture_pose, current_pose)
+        if translation_mm <= PROJECTION_POSE_TOLERANCE_MM and rotation_deg <= PROJECTION_POSE_TOLERANCE_DEG:
+            return capture_pose * hand_eye_transform
+
+        message_box = QMessageBox(self)
+        message_box.setIcon(QMessageBox.Question)
+        message_box.setWindowTitle("Robot Has Moved Since The Capture")
+        message_box.setText(
+            f"The robot is {translation_mm:.1f} mm and {rotation_deg:.1f}° away from the pose it "
+            "stood in when the frame was captured. The camera moved with it, so projecting the line "
+            "as captured would put it in the wrong place."
+        )
+        message_box.setInformativeText(
+            "Move To Capture Pose - go back first, then project. The plain check: only the "
+            "pixel-to-3D correspondence is under test, so a line that lands wrong has one cause.\n\n"
+            "Project From Here - re-map the line for where the robot stands now. This goes through "
+            "the hand-eye transform, so a line that lands right also validates the hand-eye chain - "
+            "but a line that lands wrong no longer says which of the two is at fault. Occlusion and "
+            "the projector's focus are not accounted for, so keep the change of angle modest."
+        )
+        move_button = message_box.addButton("Move To Capture Pose", QMessageBox.AcceptRole)
+        project_here_button = message_box.addButton("Project From Here", QMessageBox.ActionRole)
+        message_box.addButton(QMessageBox.Cancel)
+        message_box.setDefaultButton(move_button)
+        message_box.exec_()
+
+        clicked = message_box.clickedButton()
+        if clicked is project_here_button:
+            self.execution_status_label.setText("Projecting from the current pose (hand-eye chain included)")
+            return current_pose * hand_eye_transform
+        if clicked is not move_button:
+            return None
+
+        self.calibration_panel.on_move_to_capture_pose_clicked()
+        # The move has its own confirmation and can be declined or fail, so re-read rather
+        # than assume it happened.
+        moved_pose, _ = self.calibration_panel.read_current_pose_in_reference_frame()
+        if moved_pose is None:
+            return None
+        translation_mm, rotation_deg = self._pose_deviation(capture_pose, moved_pose)
+        if translation_mm > PROJECTION_POSE_TOLERANCE_MM or rotation_deg > PROJECTION_POSE_TOLERANCE_DEG:
+            QMessageBox.warning(
+                self,
+                "Project",
+                f"The robot is still {translation_mm:.1f} mm and {rotation_deg:.1f}° from the capture "
+                "pose, so nothing was projected.",
+            )
+            return None
+        return capture_pose * hand_eye_transform
+
+    def on_project_toggled(self, checked: bool) -> None:
+        if not checked:
+            self._stop_projection()
+            return
+        error_message = self._start_projection()
+        if error_message is None:
+            return
+        if error_message:
+            QMessageBox.warning(self, "Project", error_message)
+        # Nothing is being projected, so the button must not stay latched. Block signals so
+        # this does not come straight back in as an un-toggle.
+        self.project_button.blockSignals(True)
+        self.project_button.setChecked(False)
+        self.project_button.blockSignals(False)
+
+    def _start_projection(self) -> Optional[str]:
+        """Show the waypoint line with the camera's projector.
+
+        Returns None on success, or a message to show. An empty string means the user
+        cancelled and has already been told everything they need to know.
+        """
+        camera = self.camera_panel.camera
+        if camera is None or not camera.state.connected:
+            return "Connect a camera first."
+        if len(self.waypoints) < 2:
+            return "Generate waypoints first."
+
+        camera_to_base_transform = self._camera_to_base_for_projection()
+        if camera_to_base_transform is None:
+            return ""
+
+        # A capture on the same camera stops any projection, and the live preview captures
+        # continuously - the two cannot both be running.
+        self.camera_panel.stop_live_preview()
+        self.camera_panel.update_capture_button_state()
+
+        camera_frame_transform = camera_to_base_transform.inv()
+        points_camera_frame = np.array(
+            [(camera_frame_transform * waypoint).translation for waypoint in self.waypoints], dtype=np.float32
+        )
+        try:
+            result = build_projector_image(camera, points_camera_frame, verdicts=self._waypoint_verdicts())
+            if result.drawn_waypoint_count == 0:
+                return result.summary()
+            self._projected_image = zivid.projection.show_image_bgra(camera, result.image_bgra)
+        except Exception as ex:  # pylint: disable=broad-except
+            self._projected_image = None
+            return f"Projection failed: {ex}"
+
+        self.execution_status_label.setText(result.summary())
+        return None
+
+    def _stop_projection(self) -> None:
+        """Stop projecting, if we are. Safe to call at any time, including when the camera has
+        already torn the projection down on its own (a capture does that)."""
+        if self._projected_image is not None:
+            try:
+                self._projected_image.stop()
+            except Exception:  # pylint: disable=broad-except
+                pass  # already stopped by a capture, or the camera went away
+            self._projected_image = None
+        if self.project_button.isChecked():
+            self.project_button.blockSignals(True)
+            self.project_button.setChecked(False)
+            self.project_button.blockSignals(False)
+
     def _move_with_monitoring(self, robot_control, move_fn, *args, **kwargs) -> None:
         """Run one move asynchronously and poll pose/joints until it finishes, emitting
         live_pose_updated/live_joints_updated along the way (see class docstring)."""
@@ -547,18 +912,31 @@ class TracePanel(QWidget):
         self.live_pose_updated.emit(robot_control.get_pose().pose)
         self.live_joints_updated.emit(robot_control.get_joint_positions())
 
-    def _run_execution(self, result_queue: "queue.Queue") -> None:
-        robot_control = self.robot_connection_widget.robot_control
-        assert robot_control is not None
-        try:
-            approach_offset = self._approach_offset()
-            speed_m_s = self.speed_spinbox.value() / 1000.0
-            acceleration = self.acceleration_spinbox.value()
-            blend_m = self.blend_spinbox.value() / 1000.0
-            home_joints = self.config.home_joints()
+    def _run_execution(
+        self,
+        result_queue: "queue.Queue",
+        robot_control,
+        waypoints: List[TransformationMatrix],
+        approach_pose: TransformationMatrix,
+        retreat_pose: TransformationMatrix,
+        speed_m_s: float,
+        acceleration: float,
+        blend_m: float,
+        home_joints: Optional[List[float]],
+    ) -> None:
+        """Worker body for the execution sequence.
 
-            approach_pose = self.waypoints[0] * approach_offset
-            retreat_pose = self.waypoints[-1] * approach_offset
+        Everything it needs is passed in: Qt widgets belong to the GUI thread, and reading a
+        spin box from a worker while the GUI thread spins in processEvents is what hung the
+        reachability check under test. The same rule holds here.
+
+        It must also always put exactly one result on the queue - the caller blocks on that
+        queue, so a worker that dies before reporting would hang the GUI. Hence the try
+        covering the whole body, argument validation included.
+        """
+        try:
+            if robot_control is None:
+                raise RuntimeError("Robot is not connected.")
 
             if home_joints is not None:
                 self._move_with_monitoring(
@@ -570,7 +948,7 @@ class TracePanel(QWidget):
                 speed=DEFAULT_JOINT_SPEED, acceleration=DEFAULT_JOINT_ACCELERATION,
             )
             self._move_with_monitoring(
-                robot_control, robot_control.move_path, self.waypoints,
+                robot_control, robot_control.move_path, waypoints,
                 speed=speed_m_s, acceleration=acceleration, blend_radius=blend_m,
             )
             self._move_with_monitoring(
@@ -582,7 +960,7 @@ class TracePanel(QWidget):
                     robot_control, robot_control.move_to_joints, home_joints,
                     speed=DEFAULT_JOINT_SPEED, acceleration=DEFAULT_JOINT_ACCELERATION,
                 )
-            result_queue.put((True, f"Done - {len(self.waypoints)} waypoints"))
+            result_queue.put((True, f"Done - {len(waypoints)} waypoints"))
         except Exception as ex:  # pylint: disable=broad-except
             result_queue.put((False, str(ex)))
 
@@ -620,6 +998,34 @@ class TracePanel(QWidget):
             )
             return
 
+        # Vet the whole sequence before any of it runs. Failing mid-move_path leaves the
+        # robot parked halfway along the line with the tip near the surface, which is both
+        # the worst place to stop and the hardest to recover from - so an unreachable pose
+        # blocks execution outright, while the heuristic configuration-flip warnings only
+        # get surfaced in the confirmation below for the user to weigh.
+        approach_pose, retreat_pose = self._approach_retreat_poses()
+        report = self._perform_reachability_check(approach_pose, retreat_pose)
+        if report is None:
+            return
+        if report.error is not None:
+            QMessageBox.warning(self, "Execute", report.summary())
+            return
+        if report.failures:
+            QMessageBox.warning(
+                self,
+                "Path Not Reachable",
+                f"{report.summary()}\n\n{report.details()}\n\n"
+                "Execution was not started. The offending waypoints are marked red in the 3D view "
+                "(warnings amber) - redraw the line clear of them, or reposition the robot or the "
+                "surface, then generate the waypoints again.",
+            )
+            return
+        warning_note = (
+            f"{report.summary()}\n{report.details()}\n\n"
+            if report.warnings
+            else ""
+        )
+
         has_home = self.config.home_joints() is not None
         sequence = (
             "home → approach (moveJ) → line tracing → retreat (moveJ) → home"
@@ -629,7 +1035,7 @@ class TracePanel(QWidget):
         confirm = QMessageBox.question(
             self,
             "Confirm Execution",
-            f"Sequence: {sequence}\n"
+            f"{warning_note}Sequence: {sequence}\n"
             f"{len(self.waypoints)} waypoints, speed {self.speed_spinbox.value():.0f} mm/s, "
             f"acceleration {self.acceleration_spinbox.value():.2f} m/s², "
             f"approach/retreat {self.approach_spinbox.value():.0f} mm\n\n"
@@ -642,14 +1048,32 @@ class TracePanel(QWidget):
         if confirm != QMessageBox.Yes:
             return
 
+        # The line is about to be traced for real, and on eye-in-hand the moving arm carries
+        # the camera off the capture pose, so anything still projected would be misleading.
+        self._stop_projection()
         self.execute_button.setEnabled(False)
         self.stop_button.setEnabled(True)
         self.execution_status_label.setText("Running...")
         self.robot_connection_widget.pause_polling()
         QApplication.processEvents()
 
+        # Same rule as the reachability check: every widget value is read here, on the GUI
+        # thread, and handed to the worker as a plain value.
+        execution_kwargs = {
+            "robot_control": robot_control,
+            "waypoints": list(self.waypoints),
+            "approach_pose": approach_pose,
+            "retreat_pose": retreat_pose,
+            "speed_m_s": self.speed_spinbox.value() / 1000.0,
+            "acceleration": self.acceleration_spinbox.value(),
+            "blend_m": self.blend_spinbox.value() / 1000.0,
+            "home_joints": self.config.home_joints(),
+        }
+
         result_queue: "queue.Queue" = queue.Queue()
-        thread = threading.Thread(target=self._run_execution, args=(result_queue,))
+        thread = threading.Thread(
+            target=self._run_execution, args=(result_queue,), kwargs=execution_kwargs
+        )
         thread.start()
         while thread.is_alive():
             QApplication.processEvents()

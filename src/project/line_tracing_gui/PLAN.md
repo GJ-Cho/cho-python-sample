@@ -83,6 +83,145 @@ Z축(수직 접촉에 필요한 방향)은 그대로 보존되고, Z축 둘레�
 - `_enforce_minimum_spacing()`: 실제 3D 간격이 목표 간격의 50% 미만인 점은 그리디하게 드롭한다.
 - generate 시점에 blend 값을 실측된 최소 간격의 40%로 자동 설정한다.
 
+### 6. 실행 전 도달성 검사 (pre-flight)
+
+`move_path` 도중 웨이포인트 하나가 도달 불가로 판명되면 로봇은 **라인 중간에서 팁을 표면 가까이 둔 채로
+멈춘다.** 멈추기에 가장 나쁜 위치이고 복구도 번거롭다. 그래서 움직이기 전에 전체 시퀀스를 컨트롤러에게
+미리 물어본다 — `robot/reachability.py`.
+
+컨트롤러에 던지는 질문은 pose 하나당 3가지다.
+
+| 질문 | ur_rtde API | 무엇을 잡는가 |
+|---|---|---|
+| 팔이 닿는가 | `getInverseKinematicsHasSolution` | 작업 반경 밖, IK 해 없음 |
+| 안전 평면 안인가 | `isPoseWithinSafetyLimits` | 팬던트에 설정한 safety plane 위반 |
+| 조인트 범위 안인가 | `isJointsWithinSafetyLimits` | 조인트 각도 제한 위반 |
+
+도달성과 안전 한계는 **서로 독립**이다. 완벽히 풀리는 pose가 safety plane 밖에 있을 수 있고, 그 반대도
+된다. 그래서 셋 다 묻는다.
+
+**qnear 체이닝.** 각 pose의 IK는 *직전 스텝의 조인트 해*를 `qnear`로 넣어 푼다. 로봇이 실제로 경로를
+지나가는 방식과 같게 맞춘 것이다. 매번 현재 조인트 값으로 풀면 IK가 웨이포인트마다 다른 팔 자세를 골라도
+되므로, 정작 잡아야 할 자세 전환(branch flip)이 검사에서 사라진다.
+
+**linear vs joint 구간 구분.** 접근·후퇴·홈은 `moveJ`라 컨트롤러가 조인트 경로를 자유롭게 고른다 — 여기서
+조인트가 크게 변하는 건 정상이므로 보고하지 않는다. 반면 웨이포인트는 `movePath`의 `MoveL` 엔트리들이고,
+`movePath`는 **로봇이 서 있는 자리에서 시작**하므로 `접근 pose → 첫 웨이포인트` 구간도 직선 이동이다.
+직선 구간에서 인접 웨이포인트 간 조인트 변화가 크면 IK가 다른 팔 자세로 넘어갔다는 뜻이고, 컨트롤러는
+그 세그먼트를 거부하거나 크게 휘둘러 지나간다. 임계값(기본 30°)이 휴리스틱이라 **실패가 아니라 경고**로
+보고한다.
+
+**결과 처리.** 도달 불가가 하나라도 있으면 실행을 시작하지 않는다(사용자 우회 없음). 경고만 있으면 확인
+대화상자에 함께 띄우고 사용자가 판단한다. 3D 뷰에서 도달 불가는 빨강, 경고는 주황으로 표시해 "라인을
+어디서 다시 그릴지"를 눈으로 찾게 한다.
+
+**검사 시퀀스는 실행 시퀀스와 반드시 같아야 한다.** 다른 시퀀스를 검사하는 pre-flight는 없느니만 못하다 —
+얻지 못한 신뢰를 주기 때문이다. 그래서 접근/후퇴 pose는 `TracePanel._approach_retreat_poses()` 하나에서
+만들어 검사와 실행이 같은 값을 쓴다.
+
+**로봇 접근은 5개 조회 메서드로 한정**했다(`get_joint_positions`, `has_inverse_kinematics_solution`,
+`get_inverse_kinematics`, `is_pose_within_safety_limits`, `is_joints_within_safety_limits`). 덕분에
+시퀀싱/보고 로직을 로봇 없이 스텁으로 검증할 수 있다(`_dev_test_reachability.py`). 스텁이 이 5개 외에는
+아무 메서드도 갖고 있지 않으므로, 검사 코드가 로봇을 **움직이려 하면 그 테스트가 AttributeError로 깨진다** —
+"움직이는 pre-flight 검사"는 없는 것보다 나쁘기 때문에 일부러 이렇게 잡았다.
+
+### 7. 이동 실패 원인 표시
+
+`moveL`/`moveJ`/`movePath`는 성공 여부를 bool 하나로만 준다. 그래서 예전에는 어떤 원인이든 메시지가
+똑같이 "robot may have refused or stopped the motion"이었다. `describe_motion_failure()`가 실패 시점에
+로봇 상태를 되읽어 원인을 한 문장으로 붙인다. 확인 순서는 실제로 원인일 확률이 높은 것부터다.
+
+1. RTDE 연결이 끊겼는가
+2. `isProgramRunning()` — RTDE control script가 죽었는가 (**1순위 후보**. 실기에서 관측된
+   `moveJ (to joints) failed`가 이 모양이었다)
+3. E-stop / protective stop
+4. `getRobotMode()` / `getSafetyMode()` 숫자를 이름으로 변환해 표시
+5. 위가 전부 정상이면 — 타겟이 도달 불가였거나 safety limit 밖이었을 가능성이 크다고 안내
+
+이 함수는 **실패 경로에서 도는 코드라 절대 예외를 던지지 않는다.** 여기서 2차 예외가 나면 원래 원인이
+가려진다.
+
+### 8. 워커 스레드는 위젯을 읽지 않는다 (그리고 항상 결과를 보고한다)
+
+`TracePanel`은 이동/검사를 워커 스레드에 돌리고 GUI 스레드는 `while thread.is_alive():
+QApplication.processEvents()`로 기다린다. 이 구조에서 **워커가 스핀박스를 읽으면 안 된다** — Qt 위젯은
+GUI 스레드 소유다. 도달성 검사를 처음에 그 방식으로 만들었더니 offscreen 테스트가 실제로 멈췄고, 같은
+패턴이 `_run_execution`에도 있었다.
+
+규칙은 두 가지다.
+
+1. **입력은 GUI 스레드에서 전부 읽어 평범한 값으로 넘긴다.** `_perform_reachability_check`와
+   `on_execute_clicked`가 스핀박스·`config`·웨이포인트를 읽어 `kwargs`로 만들고, 워커
+   (`_run_reachability_check` / `_run_execution`)는 인자만 본다.
+2. **워커는 무슨 일이 있어도 결과를 큐에 정확히 하나 넣는다.** 호출자가 `result_queue.get()`에서
+   블로킹하므로, 워커가 보고 없이 죽으면 GUI가 영구 정지한다. 그래서 인자 검증까지 `try` 안에 넣었다.
+
+접근/후퇴 pose는 `_approach_retreat_poses()`로 한 번 만들어 검사와 실행에 **같은 객체**를 넘긴다
+(`_perform_reachability_check`가 이 쌍을 인자로 받는 이유). 각자 다시 계산하면 검사한 경로와 실행되는
+경로가 갈라질 수 있고, 그런 pre-flight는 없느니만 못하다.
+
+### 9. 프로젝터로 라인을 실제 표면에 투사 (`geometry/projection.py`)
+
+3D 프리뷰는 `camera_to_base`의 **역변환으로 되돌려 그리기** 때문에 그 체인이 틀려도 오류가 상쇄되어
+멀쩡하게 보인다(위 「3D 프리뷰로는 이 부류의 오류를 검증할 수 없다」 참조). 카메라 내장 프로젝터로 빛을
+실제 표면에 쏘면 상쇄가 일어나지 않는다 — 계산이 말하는 자리에 빛이 떨어지고, 그게 의도한 자리인지는
+눈이 판단한다.
+
+**무엇이 검증되는지는 어느 pose로 되돌리느냐에 달렸다.** 이게 이 기능의 핵심이다.
+
+| 모드 | `camera_to_base` | 검증되는 것 | 어긋났을 때 |
+|---|---|---|---|
+| **캡처 pose** (기본) | `capture_pose · hand_eye` | 픽셀→3D **만** (hand_eye가 소거됨) | 원인 하나 → 진단 명확 |
+| **현재 pose 보정** | `current_pose · hand_eye` | 픽셀→3D **+ hand-eye 체인** | 둘 중 어느 쪽인지 구분 불가 |
+
+`build_waypoints`가 쓴 체인을 그대로 재현하면 `hand_eye`가 소거되므로 캡처 pose 모드는 순수한 픽셀→3D
+검사다. 로봇을 다른 자리로 옮겨 보정 투사했는데도 선이 제자리에 떨어지면 **hand-eye 체인까지 맞다는
+뜻**이다. 그래서 순서가 중요하다: 먼저 캡처 pose에서 통과시키고, 그 다음에 옮겨서 보정 투사를 본다.
+캡처 pose에서 이미 어긋나 있으면 보정 투사는 아무것도 말해주지 못한다.
+
+eye-in-hand는 카메라가 팔에 달려 있으므로 캡처 이후 로봇이 움직이면 투사가 엉뚱한 곳에 간다.
+현재 pose와 캡처 pose를 비교해(`PROJECTION_POSE_TOLERANCE_MM/DEG`) 어긋나 있으면
+**Move To Capture Pose / Project From Here / Cancel** 중에서 사용자가 고른다. eye-to-hand는 카메라가
+고정이라 로봇 pose가 아예 개입하지 않으므로 이 확인을 건너뛴다.
+
+**보정 투사를 크게 신뢰하면 안 되는 이유 3가지** (각도를 조금 바꾸는 정도에서만 유효하다):
+
+- **가림(occlusion)을 처리하지 않는다.** `pixels_from_3d_points`는 depth buffer 없는 순수 투영이므로,
+  새 시점에서 가려진 점도 그대로 투사되어 실제로 거기 있는 다른 면에 빛이 떨어진다.
+- 프로젝터가 닿지 못하는 점은 **NaN** 또는 해상도 밖 좌표로 돌아온다. 둘 다 버리고 **선을 끊는다** —
+  버린 구간을 직선으로 이어 그리면 웨이포인트가 말한 적 없는 경로를 빛으로 그리는 셈이 된다.
+- 프로젝터 초점은 고정이다. 캡처 거리에서 크게 벗어나면 기하가 맞아도 선이 흐려진다.
+
+**색은 도달성 검사 결과를 그대로 쓴다** — 도달 가능 초록 / 경고 주황 / 도달 불가 빨강, 검사 전이면 노랑
+(`zividsamples`의 hand-eye verification이 confirmed/unconfirmed에 쓰는 초록/노랑 짝과 같다).
+세그먼트 색은 **양 끝점 두 개의 더 나쁜 쪽**으로 정한다. 초기 구현은 런 색을 누적 비교해서 도달 불가
+웨이포인트 하나가 그 뒤 전체를 빨강으로 삼켜 이후 판정을 다 가렸다 — 이 표시의 목적과 정반대여서
+`_dev_test_projection`에 회귀로 못박아 뒀다. 점(dot)은 세그먼트와 달리 **자기 자신의 판정 색**으로
+찍어서, 도달 불가 웨이포인트가 정확히 어디인지 표시된다.
+
+**그리기는 `cv2`를 직접 쓰지 않는다 — `CV2Handler`를 쓴다. 선택이 아니라 강제다.**
+
+`ZividQtApplication.__init__`은 `"cv2" in sys.modules`이면 예외를 던진다:
+
+```
+When using a ZividQtApplication you cannot directly load/import cv2.
+It has conflicting versions of Qt on some platforms.
+```
+
+그리고 `main.py`는 앱을 만들기 **전에** `main_window` → `trace_panel` → `geometry/projection.py`까지
+전부 import한다. 즉 `projection.py` 최상단에 `import cv2` 한 줄만 있어도 **GUI가 시작조차 못 한다.**
+`CV2Handler`가 `__init__` 안에서 cv2를 지연 import하는 이유가 바로 이것이고, 그래서 그리는 시점에
+인스턴스를 만든다 — 그때는 앱 생성 이후다. `_dev_test_projection`의 0번 시나리오가 이 불변식을
+지킨다(모듈 import 후 `cv2` 미로드 → 그리기 후 로드).
+
+점 반지름은 `CV2Handler.draw_circles`가 2px로 고정한 값을 그대로 쓴다.
+
+> **한 번 틀렸던 경위** (같은 실수 방지용): 처음엔 리포의 `modules/zividsamples/gui/cv2_handler.py`
+> 경로로 import했다가 `ModuleNotFoundError`가 났다. 리포 `modules/`는 실행되지 않는 낡은 평면 구조
+> 사본이고, 실제로 import되는 것은 `C:/Zivid/zivid-python-samples/modules`에서 설치된 신구조
+> 패키지(`gui/widgets/cv2_handler.py`)다. 그걸 "설치본에 cv2_handler가 없다"로 잘못 결론내고 `cv2`를
+> 직접 import했다가, 위의 Qt 충돌 가드에 걸려 GUI가 죽었다. **참고할 코드는 설치본에서 읽는다.**
+
 ## 현재 상태
 
 Connect / Calibration / Line Tracing 3탭 모두 동작 확인됨 (카메라 캡처, 라인 드로잉, 웨이포인트 생성
@@ -100,6 +239,32 @@ Connect / Calibration / Line Tracing 3탭 모두 동작 확인됨 (카메라 캡
 (**Move To Capture Pose** 버튼 → `RobotConnectionWidget.move_to_pose`). 캡처 pose는 파일로
 불러오지 않는다 — 항상 로봇에서 읽는다. `Read From Robot`으로 수동 재읽기도 가능하지만, 캡처 당시
 자세 그대로 서 있을 때만 유효하다.
+
+**실행 전 도달성 검사는 실기 검증 완료** (2026-09-10, 의도적으로 도달 불가 구간을 포함시켜 확인).
+
+**프로젝터 투사도 실기 검증 완료** (2026-09-10). 캡처 pose 기준 투사가 실제 표면의 의도한 자리에
+떨어지는 것을 확인했다.
+
+**캡처 pose는 로봇 연결 시 자동으로 미리 채워진다**(`CalibrationPanel._auto_read_capture_pose`).
+캡처 전에도 pose 값이 보이므로 잘못된 Pose Reference가 TCP 오프셋만큼 어긋난 값으로 즉시 드러나고,
+Move To Capture Pose도 캡처 없이 쓸 수 있다. **이미 캡처로 기록된 pose는 덮어쓰지 않는다** — 그걸
+"지금 로봇이 서 있는 자리"로 갈아치우면 모든 웨이포인트가 그 차이만큼 밀리고, 아래 「3D 프리뷰로는
+이 부류의 오류를 검증할 수 없다」대로 GUI 어디에서도 보이지 않는다.
+
+같이 고친 잠재 결함: `_camera_to_base_transform`이 `eye_in_hand`를 확인하지 않아서, eye-in-hand로
+작업한 뒤 eye-to-hand로 바꾸면 남아 있는 캡처 pose를 계속 곱했다. `build_waypoints`는 그걸 무시하므로
+3D 프리뷰와 투사가 실제로 실행될 경로와 어긋나게 된다.
+
+**남은 실기 확인 항목** (프로젝팅 관련): 검증 순서: (1) 캡처 pose에서
+선이 실제 의도한 자리에 떨어지는지 → (2) 통과하면 로봇을 옮겨 보정 투사로 hand-eye 체인까지 확인.
+확인할 것: 프로젝터 FOV 밖 점의 실제 반환 형태(NaN인지 범위 밖 좌표인지 — 둘 다 처리했지만 어느
+쪽인지 안다), 보정 투사가 각도를 얼마나 바꿔도 쓸 만한지, 초점이 흐려지는 거리.
+
+**아래 도달성 검사 관련 항목은 초기 구현 시점 기록이다.** 스텁 기반
+`_dev_test_reachability.py`가 시퀀스 구성·판정·보고를 확인하지만, UR의 IK와 safety limit이 실제 셀에서
+어떻게 답하는지는 실기로만 확인할 수 있다. 특히 확인할 것: (a) 정상 라인이 오탐 없이 통과하는지,
+(b) 30° 조인트 점프 경고 임계값이 실제 경로에서 적절한지, (c) 웨이포인트 100개 기준 검사 소요 시간
+(pose당 RTDE 왕복 3회).
 
 ### eye-in-hand의 함정: 로봇이 알려주는 pose는 TCP pose다
 
@@ -205,46 +370,16 @@ command 측 TCP를 컨트롤러 값에 자동으로 맞추려고 `getForwardKine
 
 ## 향후 개선 여지
 
-### 1. 그린 라인을 프로젝터로 표면에 투사 (사용자 승인 단계)
-
-워크플로: **라인 그리기 → 3D 확인 → 프로젝팅 → 사용자 승인 → 실행**. 계산된 웨이포인트가 실제 표면의
-의도한 위치에 있는지 **로봇을 움직이기 전에 눈으로** 확인할 수 있다. 3D 프리뷰만으로는
-`camera_to_base` 체인 오류를 절대 잡을 수 없으므로(위 "3D 프리뷰로는 이 부류의 오류를 검증할 수 없다"
-참조) 이 단계의 가치가 크다. 단, 투사도 카메라 프레임에서 이뤄지므로 **hand-eye 체인은 검증하지
-못하고**, 픽셀→3D 대응만 검증한다.
-
-설치된 API로 바로 가능하다:
-
-- `zivid.projection.projector_resolution(camera)` — 투사 이미지 크기
-- `zivid.projection.pixels_from_3d_points(camera, points)` — 카메라 프레임 3D 점 → 프로젝터 픽셀
-- `zivid.projection.show_image_bgra(camera, image)` → `ProjectedImage` (컨텍스트 매니저)
-
-즉 `build_waypoints`가 쓰는 카메라 프레임 점들을 그대로 넘겨 프로젝터 픽셀로 변환하고, 그 위에 선을
-그려 투사하면 된다. `zividsamples.gui.buttons_widget`에 이미 `QGroupBox("Projection")` +
-`project_button` 패턴이 있어 UI도 그 형태를 따를 수 있다.
-
-### 2. 실행 전 웨이포인트 도달성 검사
-
-전체 경로를 움직이기 전에 각 웨이포인트가 로봇이 도달 가능한 자세인지 미리 확인한다. 지금은
-`move_path` 중간에 실패하면 이미 절반쯤 움직인 상태가 되므로, 사전 검사가 훨씬 안전하다.
-
-`rtde_control`에 필요한 API가 전부 있다:
-
-- `getInverseKinematicsHasSolution(pose, qnear)` — IK 해 존재 여부. `move_j`가 쓰는
-  `getInverseKinematics`와 같은 계열이므로 결과가 일관된다.
-- `isPoseWithinSafetyLimits(pose)` / `isJointsWithinSafetyLimits(q)` — safety 설정 위반 여부.
-
-웨이포인트별로 통과/실패를 표시하고, 실패한 구간을 3D 뷰에서 강조하면 라인을 다시 그리거나 캡처
-위치를 옮기는 판단이 쉬워진다. 접근/후퇴 pose와 홈도 같은 검사 대상이다(실기에서 홈 이동이
-`moveJ (to joints) failed`로 거부된 사례가 있었다).
-
-### 3. 그 외
+### 1. 그 외
 
 - 속도/가속도/블렌드 값을 더 공격적으로(빠르게) 튜닝.
 - 전체 시퀀스(홈 → 접근 → 트레이싱 → 후퇴 → 홈)를 다양한 실제 표면으로 반복 검증.
-- 로봇/카메라 연결·재연결·에러 리셋의 예외 처리 보강. 특히 `moveJ`/`movePath`가 `False`를 반환할 때
-  `isProgramRunning()`, 정지 상태, safety limit 위반 여부를 함께 보여주면 원인 파악이 즉시 된다 —
-  현재 메시지는 "robot may have refused or stopped the motion"으로 원인을 구분하지 못한다.
+- 로봇/카메라 연결·재연결·에러 리셋의 예외 처리 보강. (이동 실패 원인 표시는 「주요 설계 결정 7」로
+  구현 완료 — 남은 건 카메라 쪽과 재연결 흐름이다.)
+- 도달성 검사의 조인트 점프 경고 임계값(기본 30°)을 실기 경로로 재조정. 지금 값은 근거 있는 추정이지
+  측정값이 아니다.
+- 도달성 검사가 통과한 웨이포인트만 남기고 실패 구간을 자동으로 잘라내는 옵션. 지금은 사용자가 라인을
+  다시 그려야 한다 — 자동으로 자르면 조용히 다른 경로를 실행하게 되므로 일부러 넣지 않았다.
 - 웨이포인트 리샘플링을 픽셀 호길이 대신 실제 3D 거리 기준으로. 현재는 근사여서 목표 5 mm인데
   실측 최소 간격이 3.4 mm까지 내려가고 절반 가까이가 `_enforce_minimum_spacing`에서 버려지는 경우가
   관측됐다.

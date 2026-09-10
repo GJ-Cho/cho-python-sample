@@ -39,7 +39,7 @@ gripper tip offset (see robot/README.md), not this app.
 """
 
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Tuple
 
 from PyQt5.QtCore import pyqtSignal
 from PyQt5.QtWidgets import (
@@ -66,6 +66,10 @@ from line_tracing_gui.widgets.robot_connection_widget import RobotConnectionWidg
 
 RECORDED_AT_CAPTURE_SOURCE = "(recorded at capture)"
 READ_FROM_ROBOT_SOURCE = "(read from the robot)"
+# Deliberately says it is not a capture pose: a pre-filled value is only the robot's current
+# pose, and treating it as the capture pose is exactly the mistake this field has to make
+# visible (see the note in _auto_read_capture_pose).
+READ_ON_CONNECT_SOURCE = "(current robot pose - no capture taken yet)"
 
 
 class CalibrationPanel(QWidget):
@@ -86,6 +90,10 @@ class CalibrationPanel(QWidget):
         self.hand_eye_group_box = self._build_hand_eye_group_box()
         self.capture_pose_group_box = self._build_capture_pose_group_box()
         self.capture_pose_group_box.setVisible(self.eye_in_hand)
+
+        # Pre-fill the capture pose as soon as there is a robot to read it from, so the pose
+        # fields are populated before the first capture - see _auto_read_capture_pose.
+        self.robot_connection_widget.robot_connected.connect(self._on_robot_connected)
 
         layout = QVBoxLayout()
         layout.addWidget(self.hand_eye_group_box)
@@ -262,6 +270,25 @@ class CalibrationPanel(QWidget):
         self.move_to_capture_pose_button.setEnabled(True)
 
 
+    def read_current_pose_in_reference_frame(self) -> Tuple[Optional[TransformationMatrix], Optional[str]]:
+        """The robot's pose right now, in the same frame get_capture_pose() is stored in.
+
+        Returns (pose, None), or (None, error message). Public because the projector overlay
+        has to compare where the robot stands now against where it stood for the capture,
+        and that comparison only means anything if both are in the same frame.
+        """
+        robot_control = self.robot_connection_widget.robot_control
+        if robot_control is None:
+            return None, "Robot is not connected."
+        try:
+            # get_pose() is getActualTCPPose(), i.e. the TCP pose. get_flange_pose() takes the
+            # controller's TCP offset back out - see get_pose_reference().
+            if self.get_pose_reference() == POSE_REFERENCE_FLANGE:
+                return robot_control.get_flange_pose().pose, None
+            return robot_control.get_pose().pose, None
+        except Exception as ex:  # pylint: disable=broad-except
+            return None, f"Failed to read the pose: {ex}"
+
     def record_capture_pose(self, source: str = RECORDED_AT_CAPTURE_SOURCE) -> Optional[str]:
         """Record the robot's current pose as the capture pose; returns an error, or None.
 
@@ -270,20 +297,39 @@ class CalibrationPanel(QWidget):
         nothing has to be entered by hand, and it doubles as a position to send the robot
         back to later (see on_move_to_capture_pose_clicked).
         """
-        robot_control = self.robot_connection_widget.robot_control
-        if robot_control is None:
-            return "Robot is not connected."
-        try:
-            # get_pose() is getActualTCPPose(), i.e. the TCP pose. get_flange_pose() takes the
-            # controller's TCP offset back out - see get_pose_reference().
-            if self.get_pose_reference() == POSE_REFERENCE_FLANGE:
-                target = robot_control.get_flange_pose()
-            else:
-                target = robot_control.get_pose()
-        except Exception as ex:  # pylint: disable=broad-except
-            return f"Failed to read the pose: {ex}"
-        self._set_capture_pose(target.pose, source)
+        pose, error_message = self.read_current_pose_in_reference_frame()
+        if error_message is not None:
+            return error_message
+        assert pose is not None
+        self._set_capture_pose(pose, source)
         return None
+
+    def _on_robot_connected(self, connected: bool) -> None:
+        if connected:
+            self._auto_read_capture_pose()
+
+    def _auto_read_capture_pose(self) -> None:
+        """Pre-fill the capture pose from wherever the robot stands right now.
+
+        Covers the gap between connecting the robot and taking the first capture: the pose
+        fields show real numbers straight away (so a wrong Pose Reference shows up
+        immediately, as a shift the size of the TCP offset), and Move To Capture Pose becomes
+        usable without having captured first.
+
+        **Only fills when nothing is recorded yet.** A pose recorded at capture time is the
+        real thing; replacing it with wherever the robot happens to be now would transform
+        every waypoint by the difference, and PLAN.md's point about a wrong capture pose is
+        that nothing else in this GUI would show it. Use Read From Robot to refresh on
+        purpose.
+
+        Failures are swallowed: this is a convenience, and a dialog on every connect would be
+        noise. Read From Robot reports properly when asked explicitly.
+        """
+        if not self.eye_in_hand or self.capture_pose_is_set:
+            return
+        if self.robot_connection_widget.robot_control is None:
+            return
+        self.record_capture_pose(READ_ON_CONNECT_SOURCE)
 
     def on_read_capture_pose_clicked(self) -> None:
         error_message = self.record_capture_pose(READ_FROM_ROBOT_SOURCE)
@@ -339,6 +385,9 @@ class CalibrationPanel(QWidget):
         # offset. Drop it rather than leave a plausible-looking but stale pose on screen.
         if self.capture_pose_is_set:
             self._clear_capture_pose()
+        # Re-read in the new convention. Showing the value move by one TCP offset is the
+        # clearest possible demonstration of what this radio button actually changes.
+        self._auto_read_capture_pose()
 
     def _clear_capture_pose(self) -> None:
         self.capture_pose_widget.set_transformation_matrix(TransformationMatrix())
@@ -355,6 +404,8 @@ class CalibrationPanel(QWidget):
         self.eye_in_hand_note.setVisible(self.eye_in_hand)
         self.capture_pose_group_box.setVisible(self.eye_in_hand)
         self.eye_in_hand_changed.emit(self.eye_in_hand)
+        # Switching to eye-in-hand is the point at which a capture pose starts to matter.
+        self._auto_read_capture_pose()
 
     def get_hand_eye_transform(self) -> TransformationMatrix:
         return self.hand_eye_pose_widget.get_transformation_matrix()
