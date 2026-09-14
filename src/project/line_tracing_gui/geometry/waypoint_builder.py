@@ -35,8 +35,17 @@ up to 282 deg/s of implied joint rotation with tangent-locked X axes at
 axes are instead propagated waypoint-to-waypoint by the *minimal* rotation
 that tracks the change in Z, matching the well-known "rotation-minimizing
 frame" / parallel-transport technique used for axisymmetric tools in
-5-axis machining. The line's travel direction only seeds the very first
-waypoint's X axis (an arbitrary but deterministic starting choice).
+5-axis machining.
+
+Seeding that first X axis is still a free choice, and which one is taken
+decides how far the wrist has to twist to pick the path up. Left to the line's
+own travel direction it lands wherever the stroke happened to start, and with
+several strokes each one seeds differently - so the wrist unwinds and rewinds
+between them for no physical reason. Passing `reference_x_axis` instead seeds
+every path from one fixed direction, normally the tool X axis the robot already
+holds at the capture pose: the projection of that direction onto each waypoint's
+own plane is the closest the tool can stay to where the wrist already is. The
+tangent remains the fallback when no reference is given.
 
 """
 
@@ -141,17 +150,18 @@ def _orthonormal_frame(z_axis: np.ndarray, tangent_hint: np.ndarray) -> Rotation
     return Rotation.from_matrix(np.column_stack([x_axis, y_axis, z_axis]))
 
 
-def _build_rotation_minimizing_frames(z_axes: List[np.ndarray], seed_tangent_hint: np.ndarray) -> List[Rotation]:
+def _build_rotation_minimizing_frames(z_axes: List[np.ndarray], seed_x_hint: np.ndarray) -> List[Rotation]:
     """Build one rotation per Z axis, propagating X/Y waypoint-to-waypoint by the minimal
     rotation that tracks the change in Z (see module docstring - the gripper tip is
     rotationally symmetric about tool Z, so this avoids the unnecessary about-Z rotation a
-    per-point tangent-locked X axis would add). `seed_tangent_hint` only fixes the first
-    waypoint's X axis, as an arbitrary but deterministic starting choice.
+    per-point tangent-locked X axis would add). `seed_x_hint` only fixes the first
+    waypoint's X axis - see the module docstring for why that choice is worth making
+    deliberately rather than taking whatever the stroke's first segment happened to be.
     """
     if len(z_axes) == 0:
         return []
 
-    rotations = [_orthonormal_frame(z_axis=z_axes[0], tangent_hint=seed_tangent_hint)]
+    rotations = [_orthonormal_frame(z_axis=z_axes[0], tangent_hint=seed_x_hint)]
     for index in range(1, len(z_axes)):
         z_previous = z_axes[index - 1]
         z_current = z_axes[index]
@@ -247,6 +257,7 @@ def build_waypoints(
     sample_spacing_mm: float = DEFAULT_SAMPLE_SPACING_MM,
     plane_fit_window: int = DEFAULT_PLANE_FIT_WINDOW,
     orientation_smoothing_window: int = DEFAULT_ORIENTATION_SMOOTHING_WINDOW,
+    reference_x_axis: Optional[np.ndarray] = None,
 ) -> WaypointBuildResult:
     """Turn a drawn line (pixel coordinates on the captured 2D image) into an ordered list
     of robot-base-frame waypoints that follow the local surface under the line.
@@ -270,6 +281,10 @@ def build_waypoints(
         plane_fit_window: Pixel neighborhood size used to estimate the local surface normal.
         orientation_smoothing_window: Number of neighboring waypoints averaged together when
             smoothing the tool Z axis along the path (see module docstring). 1 disables smoothing.
+        reference_x_axis: Direction, **in robot base frame**, to point the tool X axis as
+            closely as possible - normally the tool X axis the robot already holds, so the
+            wrist barely has to turn to pick the path up (see module docstring). Falls back
+            to the line's travel direction when not given.
 
     Raises:
         ValueError: if fewer than 2 line points are given, or if eye_in_hand is True but
@@ -298,8 +313,15 @@ def build_waypoints(
     raw_waypoints, merged_count = _enforce_minimum_spacing(raw_waypoints, min_spacing_mm)
 
     smoothed_z_axes = _smooth_z_axes(raw_waypoints, orientation_smoothing_window)
-    seed_tangent_hint = raw_waypoints[0].tangent_hint if raw_waypoints else np.array([1.0, 0.0, 0.0])
-    rotations = _build_rotation_minimizing_frames(smoothed_z_axes, seed_tangent_hint)
+    if reference_x_axis is not None:
+        # The reference is a base-frame direction, but the frames are built in camera frame
+        # and transformed at the end - so bring it across first.
+        seed_x_axis = camera_to_base_transform.rotation.inv().apply(np.asarray(reference_x_axis, dtype=float))
+    elif raw_waypoints:
+        seed_x_axis = raw_waypoints[0].tangent_hint
+    else:
+        seed_x_axis = np.array([1.0, 0.0, 0.0])
+    rotations = _build_rotation_minimizing_frames(smoothed_z_axes, seed_x_axis)
 
     waypoints: List[TransformationMatrix] = []
     for raw_waypoint, rotation in zip(raw_waypoints, rotations):
@@ -318,6 +340,7 @@ def build_paths(
     sample_spacing_mm: float = DEFAULT_SAMPLE_SPACING_MM,
     plane_fit_window: int = DEFAULT_PLANE_FIT_WINDOW,
     orientation_smoothing_window: int = DEFAULT_ORIENTATION_SMOOTHING_WINDOW,
+    reference_x_axis: Optional[np.ndarray] = None,
 ) -> PathsBuildResult:
     """Turn each drawn stroke into its own robot path.
 
@@ -339,7 +362,10 @@ def build_paths(
     Args:
         strokes_px: One list of (col, row) pixel coordinates per stroke, in drawing order -
             DrawableImageViewer.get_strokes() hands them over in exactly this shape.
-        The rest are as build_waypoints, and are passed through unchanged.
+        The rest are as build_waypoints, and are passed through unchanged. `reference_x_axis`
+        in particular is shared by every path, which is the point of it: all the strokes then
+        start from the same tool orientation, so the wrist does not unwind and rewind on the
+        way from one to the next.
 
     Returns:
         A PathsBuildResult. Strokes that yield fewer than 2 usable waypoints (drawn over a
@@ -371,6 +397,7 @@ def build_paths(
             sample_spacing_mm=sample_spacing_mm,
             plane_fit_window=plane_fit_window,
             orientation_smoothing_window=orientation_smoothing_window,
+            reference_x_axis=reference_x_axis,
         )
         skipped += result.skipped_pixel_count
         merged += result.merged_close_waypoint_count

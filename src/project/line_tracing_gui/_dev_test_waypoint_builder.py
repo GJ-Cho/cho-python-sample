@@ -122,6 +122,71 @@ def _main() -> None:
     assert with_stray.dropped_stroke_count == 1
     print("  a stray single-point stroke is dropped, the real line survives")
 
+    # --- seeding the tool X axis from a reference direction ---------------------------
+    #
+    # The gripper tip is rotationally symmetric about tool Z, so how far the tool has spun
+    # about its own axis is physically irrelevant - but the robot still has to physically
+    # perform whatever twist the waypoints ask for. Seeded from each stroke's own travel
+    # direction, two strokes drawn in different directions start at different twists, and
+    # the wrist unwinds and rewinds between them for nothing. A shared reference direction
+    # removes that.
+    across = [(400.0, 400.0), (600.0, 400.0), (800.0, 400.0)]  # drawn left to right
+    down = [(600.0, 300.0), (600.0, 500.0), (600.0, 700.0)]  # drawn top to bottom
+    reference_x = np.array([1.0, 0.0, 0.0])
+
+    def first_x_axes(strokes, reference):
+        built = build_paths(
+            strokes,
+            point_cloud_xyz,
+            identity_hand_eye,
+            sample_spacing_mm=spacing_mm,
+            reference_x_axis=reference,
+        )
+        assert len(built.paths) == len(strokes)
+        return [path[0].rotation.as_matrix()[:, 0] for path in built.paths]
+
+    def angle_between(first, second) -> float:
+        return float(np.degrees(np.arccos(np.clip(float(np.dot(first, second)), -1.0, 1.0))))
+
+    without_reference = first_x_axes([across, down], None)
+    with_reference = first_x_axes([across, down], reference_x)
+
+    twist_without = angle_between(*without_reference)
+    twist_with = angle_between(*with_reference)
+    print()
+    print("two strokes drawn in different directions - tool X axis at the start of each:")
+    print(f"  seeded from each stroke's own tangent : {twist_without:6.1f} deg apart")
+    print(f"  seeded from one reference direction   : {twist_with:6.1f} deg apart")
+    assert twist_with < twist_without, (twist_with, twist_without)
+    assert twist_with < 15.0, f"paths seeded from one reference should start nearly aligned: {twist_with:.1f} deg"
+
+    # And the seeded X axis really is the reference projected onto the waypoint's own plane -
+    # the closest the tool can point to it while still facing the surface.
+    for path_x_axis, stroke in zip(with_reference, [across, down]):
+        built = build_paths(
+            [stroke], point_cloud_xyz, identity_hand_eye,
+            sample_spacing_mm=spacing_mm, reference_x_axis=reference_x,
+        )
+        z_axis = built.paths[0][0].rotation.as_matrix()[:, 2]
+        projected = reference_x - np.dot(reference_x, z_axis) * z_axis
+        projected = projected / np.linalg.norm(projected)
+        assert np.allclose(path_x_axis, projected, atol=1e-5), (path_x_axis, projected)
+    print("  the seeded X axis is the reference projected onto each waypoint's plane")
+
+    # A reference pointing straight along the tool Z has no projection to take; the builder
+    # must fall back rather than divide by zero.
+    surface_normal = build_paths(
+        [across], point_cloud_xyz, identity_hand_eye, sample_spacing_mm=spacing_mm
+    ).paths[0][0].rotation.as_matrix()[:, 2]
+    degenerate = build_paths(
+        [across], point_cloud_xyz, identity_hand_eye,
+        sample_spacing_mm=spacing_mm, reference_x_axis=surface_normal,
+    )
+    first_rotation = degenerate.paths[0][0].rotation.as_matrix()
+    assert not np.any(np.isnan(first_rotation)), "degenerate reference produced NaN"
+    assert np.isclose(np.linalg.det(first_rotation), 1.0, atol=1e-4)
+    print("  a reference parallel to the tool Z falls back instead of producing NaN")
+
     print("OK")
 
 

@@ -38,7 +38,7 @@ from PyQt5.QtWidgets import (
 )
 from zividsamples.transformation_matrix import TransformationMatrix
 
-from line_tracing_gui.config import AppConfig
+from line_tracing_gui.config import POSE_REFERENCE_FLANGE, AppConfig
 from line_tracing_gui.geometry.projection import (
     VERDICT_OK,
     VERDICT_UNCHECKED,
@@ -60,15 +60,17 @@ from line_tracing_gui.widgets.spin_box_stepper import SpinBoxStepper
 SPACING_MIN_MM = 1.0
 SPACING_MAX_MM = 50.0
 
-APPROACH_DEFAULT_MM = 30.0
+# Just enough to lift the tip clear of the surface between strokes. Tracing letters means
+# a great many of these hops, so every millimetre is paid for on every one of them.
+APPROACH_DEFAULT_MM = 10.0
 APPROACH_MIN_MM = 0.0
 APPROACH_MAX_MM = 150.0
 
-EXEC_SPEED_DEFAULT_MM_S = 20.0
+EXEC_SPEED_DEFAULT_MM_S = 30.0
 EXEC_SPEED_MIN_MM_S = 1.0
 EXEC_SPEED_MAX_MM_S = 200.0
 
-EXEC_ACCELERATION_DEFAULT = 0.2
+EXEC_ACCELERATION_DEFAULT = 0.3
 EXEC_ACCELERATION_MIN = 0.05
 EXEC_ACCELERATION_MAX = 1.0
 
@@ -239,8 +241,10 @@ class TracePanel(QWidget):
         self.approach_spinbox.setSuffix(" mm")
         self.approach_spinbox.setToolTip(
             "Standoff distance from the surface where the gripper starts its approach and ends its\n"
-            "retreat, at the first/last point of the line (along the waypoint's local -Z, i.e. the\n"
-            "direction opposite to where the tip points)"
+            "retreat, at the first/last point of every line (along the waypoint's local -Z, i.e. the\n"
+            "direction opposite to where the tip points).\n\n"
+            "This is also how far the tip lifts between one line and the next, so with many short\n"
+            "lines it is paid for many times over - keep it just clear of the surface."
         )
 
         self.speed_spinbox = QDoubleSpinBox()
@@ -450,6 +454,7 @@ class TracePanel(QWidget):
                 eye_in_hand=eye_in_hand,
                 robot_pose=capture_pose,
                 sample_spacing_mm=self.spacing_spinbox.value(),
+                reference_x_axis=self._reference_tool_x_axis(),
             )
         except ValueError as ex:
             QMessageBox.warning(self, "Generate Waypoints", str(ex))
@@ -489,6 +494,41 @@ class TracePanel(QWidget):
             [[camera_frame_transform * waypoint for waypoint in path] for path in self.paths]
         )
         self._update_execute_button_state()
+
+    def _reference_tool_x_axis(self) -> Optional[np.ndarray]:
+        """Base-frame direction to keep the tool X axis near, so the wrist barely turns.
+
+        The tool X axis the robot holds at the capture pose. Every path is seeded from this
+        one direction (see geometry.waypoint_builder), which matters most when tracing many
+        short strokes: seeded from each stroke's own travel direction instead, the wrist
+        unwinds and rewinds between them for no physical reason - the tip is rotationally
+        symmetric, so the twist buys nothing.
+
+        Returns None when there is nothing to read it from, and the builder then falls back
+        to each line's travel direction.
+        """
+        robot_control = self.robot_connection_widget.robot_control
+        pose = self.calibration_panel.get_capture_pose()
+        if pose is not None:
+            # get_capture_pose() is in whichever frame Pose Reference names. Tool axes are
+            # the flange's turned by the controller's TCP offset, so a flange-referenced
+            # pose needs that rotation put back on. On this rig the offset is a pure
+            # translation and the two coincide - but that is a fact about the rig, not
+            # something to build into the code.
+            if self.calibration_panel.get_pose_reference() == POSE_REFERENCE_FLANGE and robot_control is not None:
+                try:
+                    pose = pose * robot_control.get_tcp_offset()
+                except Exception:  # pylint: disable=broad-except
+                    pass  # keep the flange orientation; it differs only if the offset rotates
+            return np.asarray(pose.rotation.as_matrix()[:, 0], dtype=float)
+        # Eye-to-hand has no capture pose; the arm's current orientation is the next best
+        # thing to stay close to.
+        if robot_control is not None:
+            try:
+                return np.asarray(robot_control.get_pose().pose.rotation.as_matrix()[:, 0], dtype=float)
+            except Exception:  # pylint: disable=broad-except
+                return None
+        return None
 
     def _transform_chain_description(self) -> str:
         """Which camera -> base chain the waypoints were built through.
