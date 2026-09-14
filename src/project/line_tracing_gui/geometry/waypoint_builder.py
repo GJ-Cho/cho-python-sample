@@ -73,6 +73,20 @@ class WaypointBuildResult:
 
 
 @dataclass
+class PathsBuildResult:
+    """One independent robot path per drawn stroke - see build_paths."""
+
+    paths: List[List[TransformationMatrix]]  # base frame, in drawing order
+    skipped_pixel_count: int  # resampled line points with no usable 3D data nearby
+    merged_close_waypoint_count: int  # points dropped for being too close (in 3D) to the previous
+    dropped_stroke_count: int  # strokes that produced fewer than 2 usable waypoints
+
+    @property
+    def waypoint_count(self) -> int:
+        return sum(len(path) for path in self.paths)
+
+
+@dataclass
 class _RawWaypoint:
     point: np.ndarray  # mm, camera frame
     z_axis: np.ndarray  # unit vector, into the surface (see module docstring)
@@ -293,3 +307,82 @@ def build_waypoints(
         waypoints.append(camera_to_base_transform * pose_camera_frame)
 
     return WaypointBuildResult(waypoints=waypoints, skipped_pixel_count=skipped, merged_close_waypoint_count=merged_count)
+
+
+def build_paths(
+    strokes_px: List[List[Pixel]],
+    point_cloud_xyz: PointCloudXYZ,
+    hand_eye_transform: TransformationMatrix,
+    eye_in_hand: bool = False,
+    robot_pose: Optional[TransformationMatrix] = None,
+    sample_spacing_mm: float = DEFAULT_SAMPLE_SPACING_MM,
+    plane_fit_window: int = DEFAULT_PLANE_FIT_WINDOW,
+    orientation_smoothing_window: int = DEFAULT_ORIENTATION_SMOOTHING_WINDOW,
+) -> PathsBuildResult:
+    """Turn each drawn stroke into its own robot path.
+
+    **Strokes must not be concatenated before getting here.** Joining them puts the end of
+    one stroke next to the start of the next, which every step below then reads as an
+    ordinary pair of neighbours:
+
+    - `_resample_polyline` walks consecutive pairs, so it lays evenly spaced samples along
+      the gap between two strokes. Those become real waypoints, and the robot traces a
+      segment nobody drew - with a pointed tip against the surface.
+    - the rotation-minimizing frame propagates across the jump, so the second stroke's tool
+      orientation is seeded by wherever the first one happened to end.
+    - `_enforce_minimum_spacing` compares across the seam and can drop the first waypoint of
+      a stroke for being close to the last one of the previous stroke.
+
+    Building per stroke removes all three. Each path gets its own frame seed, its own
+    spacing pass, and its own approach and retreat when it runs.
+
+    Args:
+        strokes_px: One list of (col, row) pixel coordinates per stroke, in drawing order -
+            DrawableImageViewer.get_strokes() hands them over in exactly this shape.
+        The rest are as build_waypoints, and are passed through unchanged.
+
+    Returns:
+        A PathsBuildResult. Strokes that yield fewer than 2 usable waypoints (drawn over a
+        hole in the point cloud, or barely a click) are left out and counted in
+        `dropped_stroke_count` rather than raising - one bad stroke should not throw away
+        the good ones drawn beside it.
+
+    Raises:
+        ValueError: if eye_in_hand is True but robot_pose was not given. Checked once, up
+            front: that is a caller mistake about the whole capture, not about one stroke.
+    """
+    if eye_in_hand and robot_pose is None:
+        raise ValueError("eye_in_hand=True requires robot_pose (the robot pose at capture time).")
+
+    paths: List[List[TransformationMatrix]] = []
+    skipped = 0
+    merged = 0
+    dropped = 0
+    for stroke in strokes_px:
+        if len(stroke) < 2:
+            dropped += 1
+            continue
+        result = build_waypoints(
+            stroke,
+            point_cloud_xyz,
+            hand_eye_transform,
+            eye_in_hand=eye_in_hand,
+            robot_pose=robot_pose,
+            sample_spacing_mm=sample_spacing_mm,
+            plane_fit_window=plane_fit_window,
+            orientation_smoothing_window=orientation_smoothing_window,
+        )
+        skipped += result.skipped_pixel_count
+        merged += result.merged_close_waypoint_count
+        # A single waypoint is not a path: there is nothing to trace between.
+        if len(result.waypoints) < 2:
+            dropped += 1
+            continue
+        paths.append(result.waypoints)
+
+    return PathsBuildResult(
+        paths=paths,
+        skipped_pixel_count=skipped,
+        merged_close_waypoint_count=merged,
+        dropped_stroke_count=dropped,
+    )

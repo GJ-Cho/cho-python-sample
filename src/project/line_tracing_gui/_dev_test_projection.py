@@ -24,6 +24,7 @@ import numpy as np
 
 from line_tracing_gui.geometry.projection import (
     BACKGROUND_BGRA,
+    LINE_THICKNESS_PX,
     VERDICT_COLORS_BGRA,
     VERDICT_OK,
     VERDICT_UNCHECKED,
@@ -82,6 +83,20 @@ def _pure_verdict_colors(image):
     return present & set(VERDICT_COLORS_BGRA.values())
 
 
+def _build_single(camera, points_camera_frame, verdicts=None, **kwargs):
+    """One path, spelled the way the single-path scenarios read best.
+
+    build_projector_image always takes a list of paths; wrapping here keeps the scenarios
+    below about what is being drawn rather than about list-of-one plumbing.
+    """
+    return build_projector_image(
+        camera,
+        [points_camera_frame],
+        verdicts=None if verdicts is None else [verdicts],
+        **kwargs,
+    )
+
+
 def _report(passed: bool, description: str, detail: str = "") -> bool:
     print(f"  [{'PASS' if passed else 'FAIL'}] {description}{('  - ' + detail) if detail else ''}")
     return passed
@@ -103,7 +118,7 @@ def _main() -> None:
 
     print("1. a clean path renders, on the projector's own resolution")
     points = _points_along_x(10)
-    result = build_projector_image(
+    result = _build_single(
         FAKE_CAMERA, points, resolution_height_width=RESOLUTION, pixel_mapper=_straight_line_mapper()
     )
     checks.append(
@@ -140,7 +155,7 @@ def _main() -> None:
     verdicts = [VERDICT_OK] * 10
     verdicts[5] = VERDICT_UNREACHABLE
     verdicts[8] = VERDICT_WARNING
-    result = build_projector_image(
+    result = _build_single(
         FAKE_CAMERA,
         points,
         verdicts=verdicts,
@@ -193,7 +208,7 @@ def _main() -> None:
     )
 
     print("\n4. a point the projector cannot map (NaN) breaks the line, it is not bridged")
-    result = build_projector_image(
+    result = _build_single(
         FAKE_CAMERA, points, resolution_height_width=RESOLUTION, pixel_mapper=_mapper_with_nan([4])
     )
     checks.append(
@@ -214,7 +229,7 @@ def _main() -> None:
     print("\n5. points outside the projector's resolution are skipped the same way")
     # Push half the line off the right-hand edge of a 320 px wide projector.
     wide_points = _points_along_x(10, step=50.0)
-    result = build_projector_image(
+    result = _build_single(
         FAKE_CAMERA, wide_points, resolution_height_width=RESOLUTION, pixel_mapper=_straight_line_mapper()
     )
     expected_inside = sum(1 for index in range(10) if 0 <= index * 50.0 + 20.0 < RESOLUTION[1])
@@ -235,7 +250,7 @@ def _main() -> None:
 
     print("\n6. a path entirely outside the projector draws nothing and says so")
     far_points = np.array([[10_000.0, 10_000.0, 500.0]] * 5, dtype=np.float32)
-    result = build_projector_image(
+    result = _build_single(
         FAKE_CAMERA, far_points, resolution_height_width=RESOLUTION, pixel_mapper=_straight_line_mapper()
     )
     checks.append(_report(result.drawn_waypoint_count == 0, "nothing drawn", result.summary()))
@@ -262,7 +277,7 @@ def _main() -> None:
         ),
     ):
         try:
-            build_projector_image(
+            _build_single(
                 FAKE_CAMERA,
                 resolution_height_width=RESOLUTION,
                 pixel_mapper=_straight_line_mapper(),
@@ -271,6 +286,97 @@ def _main() -> None:
             checks.append(_report(False, f"{description} raises ValueError", "nothing raised"))
         except ValueError as ex:
             checks.append(_report(expected in str(ex), f"{description} raises ValueError", str(ex)))
+
+    print()
+    print("9. separate paths are drawn separately - never bridged into one line")
+    # Two five-point paths, well apart. If the gap between them were drawn, there would be
+    # nine segments instead of eight - and light on the surface describing a move the robot
+    # makes in the air, tip up, not along the part.
+    path_a = _points_along_x(5, step=10.0, y=0.0)
+    path_b = _points_along_x(5, step=10.0, y=60.0)
+    result = build_projector_image(
+        FAKE_CAMERA,
+        [path_a, path_b],
+        resolution_height_width=RESOLUTION,
+        pixel_mapper=_straight_line_mapper(),
+    )
+    checks.append(
+        _report(result.segment_count == 8, "8 segments for 2 paths of 5 (not 9)", f"got {result.segment_count}")
+    )
+    checks.append(_report(result.path_count == 2, "path_count is 2", f"got {result.path_count}"))
+    checks.append(
+        _report(result.drawn_waypoint_count == 10, "all 10 waypoints drawn", result.summary())
+    )
+    checks.append(_report("2 paths" in result.summary(), "summary says how many paths", result.summary()))
+
+    # Nothing drawn on the rows between the two paths: the mapper puts path A at y=100 and
+    # path B at y=160, so a bridging line would leave marks in between.
+    drawn_rows = np.unique(np.argwhere(_drawn_mask(result.image_bgra))[:, 0])
+    between = [row for row in drawn_rows if 100 + LINE_THICKNESS_PX < row < 160 - LINE_THICKNESS_PX]
+    checks.append(
+        _report(not between, "nothing is drawn in the gap between the paths", f"rows {between[:5]}")
+    )
+
+    print()
+    print("10. each path carries its own verdicts")
+    result = build_projector_image(
+        FAKE_CAMERA,
+        [path_a, path_b],
+        verdicts=[[VERDICT_OK] * 5, [VERDICT_UNREACHABLE] * 5],
+        resolution_height_width=RESOLUTION,
+        pixel_mapper=_straight_line_mapper(),
+    )
+    present = _pure_verdict_colors(result.image_bgra)
+    checks.append(
+        _report(
+            present == {VERDICT_COLORS_BGRA[VERDICT_OK], VERDICT_COLORS_BGRA[VERDICT_UNREACHABLE]},
+            "one path green, the other red",
+            str(present),
+        )
+    )
+    green_rows = np.argwhere(
+        np.all(result.image_bgra == np.array(VERDICT_COLORS_BGRA[VERDICT_OK], dtype=np.uint8), axis=2)
+    )[:, 0]
+    red_rows = np.argwhere(
+        np.all(result.image_bgra == np.array(VERDICT_COLORS_BGRA[VERDICT_UNREACHABLE], dtype=np.uint8), axis=2)
+    )[:, 0]
+    checks.append(
+        _report(
+            len(green_rows) > 0 and len(red_rows) > 0 and green_rows.max() < red_rows.min(),
+            "the colours stay on their own path, they do not bleed across the gap",
+            f"green rows <= {green_rows.max() if len(green_rows) else '-'}, "
+            f"red rows >= {red_rows.min() if len(red_rows) else '-'}",
+        )
+    )
+
+    print()
+    print("11. a path too short to trace contributes nothing but does not break the rest")
+    result = build_projector_image(
+        FAKE_CAMERA,
+        [path_a, _points_along_x(1, y=60.0)],  # a stray click alongside a real line
+        resolution_height_width=RESOLUTION,
+        pixel_mapper=_straight_line_mapper(),
+    )
+    checks.append(
+        _report(result.segment_count == 4, "only the real path contributes segments", f"got {result.segment_count}")
+    )
+    checks.append(
+        _report(result.drawn_waypoint_count == 6, "its single point is still marked with a dot", result.summary())
+    )
+
+    print()
+    print("12. mismatched verdict lists are refused")
+    try:
+        build_projector_image(
+            FAKE_CAMERA,
+            [path_a, path_b],
+            verdicts=[[VERDICT_OK] * 5],
+            resolution_height_width=RESOLUTION,
+            pixel_mapper=_straight_line_mapper(),
+        )
+        checks.append(_report(False, "verdict list count mismatch raises ValueError", "nothing raised"))
+    except ValueError as ex:
+        checks.append(_report("verdict lists for" in str(ex), "verdict list count mismatch raises ValueError", str(ex)))
 
     print(f"\n{'ALL CHECKS PASSED' if all(checks) else 'FAILURES ABOVE'} ({sum(checks)}/{len(checks)})")
     if not all(checks):

@@ -32,7 +32,7 @@ from line_tracing_gui.robot.reachability import (
     DEFAULT_JOINT_STEP_WARNING_DEG,
     MOTION_JOINT,
     MOTION_LINEAR,
-    check_path_reachability,
+    check_paths_reachability,
 )
 
 MAX_REACH_MM = 1000.0
@@ -124,6 +124,20 @@ def _path(start: Tuple[float, float, float], end: Tuple[float, float, float], co
     ]
 
 
+def _check_single(robot, waypoints, approach_pose, retreat_pose, **kwargs):
+    """One path, spelled the way the single-path scenarios read best.
+
+    check_paths_reachability always takes lists; wrapping here keeps the scenarios below
+    about what is being checked rather than about list-of-one plumbing.
+    """
+    return check_paths_reachability(robot, [waypoints], [approach_pose], [retreat_pose], **kwargs)
+
+
+def _waypoints_of(keys, path_index: int = 0):
+    """Waypoint indices belonging to one path, from (path, waypoint) pairs."""
+    return [waypoint for path, waypoint in keys if path == path_index]
+
+
 def _report(passed: bool, description: str, detail: str = "") -> bool:
     print(f"  [{'PASS' if passed else 'FAIL'}] {description}{('  - ' + detail) if detail else ''}")
     return passed
@@ -135,7 +149,7 @@ def _main() -> None:
     print("1. a clean path passes, and every step of the sequence gets checked")
     waypoints = _path((300.0, 0.0, 300.0), (400.0, 0.0, 300.0), 21)
     home_joints = [0.0, -1.0, 1.0, 0.0, 1.5, 0.0]
-    report = check_path_reachability(
+    report = _check_single(
         FakeRobot(),
         waypoints,
         approach_pose=_pose(300.0, 0.0, 330.0),
@@ -167,7 +181,7 @@ def _main() -> None:
     )
 
     print("\n2. without a home posture the two home steps are dropped")
-    report = check_path_reachability(
+    report = _check_single(
         FakeRobot(),
         waypoints,
         approach_pose=_pose(300.0, 0.0, 330.0),
@@ -187,7 +201,7 @@ def _main() -> None:
         for index, waypoint in enumerate(waypoints)
         if float(np.linalg.norm(np.asarray(waypoint.translation, dtype=float))) > MAX_REACH_MM
     ]
-    report = check_path_reachability(
+    report = _check_single(
         FakeRobot(),
         waypoints,
         approach_pose=_pose(900.0, 0.0, 130.0),
@@ -196,9 +210,9 @@ def _main() -> None:
     checks.append(_report(not report.ok, "report is not ok", report.summary()))
     checks.append(
         _report(
-            report.failed_waypoint_indices() == expected_unreachable,
+            _waypoints_of(report.failed_waypoint_indices()) == expected_unreachable,
             "exactly the out-of-reach waypoints are flagged",
-            f"got {report.failed_waypoint_indices()}, expected {expected_unreachable}",
+            f"got {_waypoints_of(report.failed_waypoint_indices())}, expected {expected_unreachable}",
         )
     )
     checks.append(
@@ -222,7 +236,7 @@ def _main() -> None:
     expected_below = [
         index for index, waypoint in enumerate(waypoints) if float(waypoint.translation[2]) < FLOOR_Z_MM
     ]
-    report = check_path_reachability(
+    report = _check_single(
         FakeRobot(),
         waypoints,
         approach_pose=_pose(300.0, 0.0, 130.0),
@@ -230,9 +244,9 @@ def _main() -> None:
     )
     checks.append(
         _report(
-            report.failed_waypoint_indices() == expected_below,
+            _waypoints_of(report.failed_waypoint_indices()) == expected_below,
             "exactly the below-floor waypoints are flagged",
-            f"got {report.failed_waypoint_indices()}, expected {expected_below}",
+            f"got {_waypoints_of(report.failed_waypoint_indices())}, expected {expected_below}",
         )
     )
     checks.append(
@@ -247,7 +261,7 @@ def _main() -> None:
     waypoints = _path((300.0, 0.0, 300.0), (400.0, 0.0, 300.0), 21)
     flip_start = 350.0
     robot = FakeRobot(flip_x_range=(flip_start, 1e9))
-    report = check_path_reachability(
+    report = _check_single(
         robot,
         waypoints,
         approach_pose=_pose(300.0, 0.0, 330.0),
@@ -259,9 +273,9 @@ def _main() -> None:
     checks.append(_report(not report.failures, "no failures - the poses are all reachable"))
     checks.append(
         _report(
-            report.warned_waypoint_indices() == [first_flipped],
+            _waypoints_of(report.warned_waypoint_indices()) == [first_flipped],
             "warning lands on the waypoint where the configuration changes",
-            f"got {report.warned_waypoint_indices()}, expected [{first_flipped}]",
+            f"got {_waypoints_of(report.warned_waypoint_indices())}, expected [{first_flipped}]",
         )
     )
     checks.append(
@@ -278,7 +292,7 @@ def _main() -> None:
     )
 
     print("\n6. the same flip on a joint leg (approach) is not warned about")
-    report = check_path_reachability(
+    report = _check_single(
         FakeRobot(flip_x_range=(-1e9, 1e9)),  # every pose flipped -> approach jumps from the seed
         waypoints,
         approach_pose=_pose(300.0, 0.0, 330.0),
@@ -297,7 +311,7 @@ def _main() -> None:
     # a gap gets compared against a stale one and the report fills with noise.
     waypoints = _path((300.0, 0.0, 300.0), (400.0, 0.0, 300.0), 21)
     waypoints[10] = _pose(5000.0, 0.0, 300.0)  # far out of reach, in the middle of the path
-    report = check_path_reachability(
+    report = _check_single(
         FakeRobot(),
         waypoints,
         approach_pose=_pose(300.0, 0.0, 330.0),
@@ -305,9 +319,9 @@ def _main() -> None:
     )
     checks.append(
         _report(
-            report.failed_waypoint_indices() == [10],
+            _waypoints_of(report.failed_waypoint_indices()) == [10],
             "only the unreachable waypoint fails",
-            f"got {report.failed_waypoint_indices()}",
+            f"got {_waypoints_of(report.failed_waypoint_indices())}",
         )
     )
     checks.append(
@@ -315,7 +329,7 @@ def _main() -> None:
     )
 
     print("\n8. a home posture outside the joint limits fails, with no waypoint index")
-    report = check_path_reachability(
+    report = _check_single(
         FakeRobot(joint_limit_rad=0.5),
         _path((300.0, 0.0, 300.0), (400.0, 0.0, 300.0), 21),
         approach_pose=_pose(300.0, 0.0, 330.0),
@@ -339,7 +353,7 @@ def _main() -> None:
     )
 
     print("\n9. a query blowing up mid-check is reported, not raised")
-    report = check_path_reachability(
+    report = _check_single(
         FakeRobot(raise_on_query=RuntimeError("RTDE interface not connected.")),
         _path((300.0, 0.0, 300.0), (400.0, 0.0, 300.0), 21),
         approach_pose=_pose(300.0, 0.0, 330.0),
@@ -350,7 +364,7 @@ def _main() -> None:
     checks.append(_report("did not complete" in report.summary(), "summary says so", report.summary()))
 
     print("\n10. too few waypoints is refused up front")
-    report = check_path_reachability(
+    report = _check_single(
         FakeRobot(), [_pose(300.0, 0.0, 300.0)], approach_pose=_pose(300.0, 0.0, 330.0),
         retreat_pose=_pose(300.0, 0.0, 330.0),
     )
@@ -358,7 +372,7 @@ def _main() -> None:
 
     print("\n11. the details listing is bounded")
     waypoints = _path((1100.0, 0.0, 100.0), (1500.0, 0.0, 100.0), 60)  # all out of reach
-    report = check_path_reachability(
+    report = _check_single(
         FakeRobot(), waypoints, approach_pose=_pose(1100.0, 0.0, 130.0), retreat_pose=_pose(1500.0, 0.0, 130.0)
     )
     detail_lines = report.details().splitlines()
@@ -367,6 +381,146 @@ def _main() -> None:
             len(detail_lines) <= 13 and detail_lines[-1].startswith("...and"),
             "long failure lists are truncated with a count",
             f"{len(detail_lines)} lines, last: {detail_lines[-1] if detail_lines else ''}",
+        )
+    )
+
+    print()
+    print("12. several paths each get their own approach and retreat")
+    paths = [
+        _path((300.0, 0.0, 300.0), (400.0, 0.0, 300.0), 11),
+        _path((300.0, 100.0, 300.0), (400.0, 100.0, 300.0), 6),
+        _path((300.0, 200.0, 300.0), (400.0, 200.0, 300.0), 4),
+    ]
+    approaches = [_pose(300.0, y, 330.0) for y in (0.0, 100.0, 200.0)]
+    retreats = [_pose(400.0, y, 330.0) for y in (0.0, 100.0, 200.0)]
+    home_joints = [0.0, -1.0, 1.0, 0.0, 1.5, 0.0]
+    report = check_paths_reachability(
+        FakeRobot(), paths, approaches, retreats, home_joints=home_joints
+    )
+    # home + (approach + waypoints + retreat) per path + home back
+    expected_steps = 2 + sum(len(path) + 2 for path in paths)
+    checks.append(_report(report.ok, "report.ok", report.summary()))
+    checks.append(
+        _report(
+            len(report.checks) == expected_steps,
+            f"{expected_steps} steps checked",
+            f"got {len(report.checks)}",
+        )
+    )
+    joint_legs = [check for check in report.checks if check.motion == MOTION_JOINT]
+    # 2 home steps + one approach and one retreat per path
+    checks.append(
+        _report(
+            len(joint_legs) == 2 + 2 * len(paths),
+            "one approach and one retreat per path, plus the two home steps",
+            f"got {len(joint_legs)} joint legs",
+        )
+    )
+    linear_legs = [check for check in report.checks if check.motion == MOTION_LINEAR]
+    checks.append(
+        _report(
+            len(linear_legs) == sum(len(path) for path in paths),
+            "every waypoint of every path is a linear leg",
+            f"got {len(linear_legs)}",
+        )
+    )
+    # Travelling between two traced lines has to go up and over: the retreat of one path
+    # must come before the approach of the next, never a waypoint straight into a waypoint.
+    labels = [check.label for check in report.checks]
+    checks.append(
+        _report(
+            labels[0] == "Home"
+            and labels[1] == "Path 1 approach"
+            and "Path 1 retreat" in labels
+            and labels.index("Path 1 retreat") < labels.index("Path 2 approach"),
+            "path 1 retreats before path 2 approaches",
+            f"{labels[1]} ... {labels[-2]}",
+        )
+    )
+    checks.append(
+        _report(
+            all(check.path_index is not None for check in report.checks if not check.label.startswith("Home")),
+            "every non-home step knows which path it belongs to",
+        )
+    )
+
+    print()
+    print("13. a failure is attributed to the path it happened in")
+    paths = [
+        _path((300.0, 0.0, 300.0), (400.0, 0.0, 300.0), 11),  # fine
+        _path((900.0, 0.0, 100.0), (1100.0, 0.0, 100.0), 11),  # runs out of reach
+    ]
+    approaches = [_pose(300.0, 0.0, 330.0), _pose(900.0, 0.0, 130.0)]
+    retreats = [_pose(400.0, 0.0, 330.0), _pose(500.0, 0.0, 130.0)]
+    report = check_paths_reachability(FakeRobot(), paths, approaches, retreats)
+    failed = report.failed_waypoint_indices()
+    checks.append(_report(not report.ok, "report is not ok", report.summary()))
+    checks.append(
+        _report(
+            _waypoints_of(failed, path_index=0) == [],
+            "the good path has no failing waypoints",
+            f"got {_waypoints_of(failed, 0)}",
+        )
+    )
+    expected_bad = [
+        index
+        for index, waypoint in enumerate(paths[1])
+        if float(np.linalg.norm(np.asarray(waypoint.translation, dtype=float))) > MAX_REACH_MM
+    ]
+    checks.append(
+        _report(
+            _waypoints_of(failed, path_index=1) == expected_bad,
+            "the bad path's own indices are reported, not global ones",
+            f"got {_waypoints_of(failed, 1)}, expected {expected_bad}",
+        )
+    )
+    checks.append(
+        _report(
+            all(check.label.startswith("Path 2") for check in report.failures),
+            "failure labels name the path",
+            report.failures[0].label if report.failures else "",
+        )
+    )
+
+    print()
+    print("14. a stroke too short to trace is skipped, not fatal")
+    paths = [
+        _path((300.0, 0.0, 300.0), (400.0, 0.0, 300.0), 11),
+        [_pose(300.0, 100.0, 300.0)],  # a stray click: one waypoint, nothing to trace
+    ]
+    approaches = [_pose(300.0, 0.0, 330.0), _pose(300.0, 100.0, 330.0)]
+    retreats = [_pose(400.0, 0.0, 330.0), _pose(300.0, 100.0, 330.0)]
+    report = check_paths_reachability(FakeRobot(), paths, approaches, retreats)
+    checks.append(_report(report.ok, "the usable path still checks out", report.summary()))
+    checks.append(
+        _report(
+            len(report.checks) == len(paths[0]) + 2,
+            "only the usable path contributes steps",
+            f"got {len(report.checks)}",
+        )
+    )
+    # With one usable path left, the labels drop back to the unprefixed form.
+    checks.append(
+        _report(
+            report.checks[0].label == "Approach",
+            "a single usable path keeps the plain labels",
+            report.checks[0].label,
+        )
+    )
+
+    print()
+    print("15. mismatched pose lists are refused instead of silently misaligned")
+    report = check_paths_reachability(
+        FakeRobot(),
+        [_path((300.0, 0.0, 300.0), (400.0, 0.0, 300.0), 11)] * 2,
+        [_pose(300.0, 0.0, 330.0)],  # one approach for two paths
+        [_pose(400.0, 0.0, 330.0)] * 2,
+    )
+    checks.append(
+        _report(
+            report.error is not None and not report.checks,
+            "refused up front",
+            str(report.error),
         )
     )
 

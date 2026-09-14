@@ -8,6 +8,11 @@ support (drag is consumed by ScrollHandDrag for panning). This widget adds a
 coordinates (== original image pixel coordinates, since set_pixmap loads the
 pixmap at native resolution), and renders them as an overlay path.
 
+One press-drag-release is one stroke, and strokes stay separate all the way
+through: the overlay already draws each with its own moveTo, and get_strokes()
+hands them out as a list of lists. Everything downstream treats one stroke as
+one robot path.
+
 """
 
 from typing import List, Optional, Tuple
@@ -41,11 +46,19 @@ class DrawableImageViewer(ImageViewer):
     def is_draw_mode(self) -> bool:
         return self._draw_mode
 
-    def get_line_points(self) -> Stroke:
-        points: Stroke = []
-        for stroke in self._strokes:
-            points.extend(stroke)
-        return points
+    def get_strokes(self) -> List[Stroke]:
+        """Every stroke drawn so far, each one separately, in drawing order.
+
+        Strokes are deliberately NOT concatenated. Flattening them into one list used to be
+        what this widget handed out, and it made the two ends of a gap look like an ordinary
+        pair of neighbouring points: the waypoint builder then resampled a straight line
+        across it, so the robot traced a segment nobody drew, with the tip down. Each stroke
+        is its own path - see geometry.waypoint_builder.build_paths.
+        """
+        return [list(stroke) for stroke in self._strokes]
+
+    def stroke_count(self) -> int:
+        return len(self._strokes)
 
     def has_line(self) -> bool:
         return len(self._strokes) > 0

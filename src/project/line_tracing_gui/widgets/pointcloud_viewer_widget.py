@@ -10,7 +10,7 @@ captured in camera frame.
 
 """
 
-from typing import List, Optional
+from typing import List, Optional, Sequence, Tuple
 
 import numpy as np
 import pyqtgraph as pg
@@ -59,15 +59,16 @@ class PointCloudViewerWidget(QWidget):
         self.view.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self._scatter_item: Optional[gl.GLScatterPlotItem] = None
-        self._path_item: Optional[gl.GLLinePlotItem] = None
+        self._path_items: List[gl.GLLinePlotItem] = []  # one polyline per drawn path
         self._marker_item: Optional[gl.GLScatterPlotItem] = None
         self._axis_items: List[gl.GLLinePlotItem] = []
         self._current_position_item: Optional[gl.GLScatterPlotItem] = None
         self._unreachable_item: Optional[gl.GLScatterPlotItem] = None
         self._warning_item: Optional[gl.GLScatterPlotItem] = None
-        # Waypoint positions of the currently shown path (camera frame), kept so
-        # reachability verdicts can be drawn later by index without re-passing the poses.
-        self._waypoint_positions: Optional[np.ndarray] = None
+        # Waypoint positions of the currently shown paths (camera frame), one Nx3 array per
+        # path, kept so reachability verdicts can be drawn later by (path, waypoint) index
+        # without re-passing the poses.
+        self._path_positions: Optional[List[np.ndarray]] = None
 
         layout = QVBoxLayout()
         layout.setContentsMargins(0, 0, 0, 0)
@@ -75,25 +76,13 @@ class PointCloudViewerWidget(QWidget):
         self.setLayout(layout)
 
     def clear(self) -> None:
-        for item in (
-            self._scatter_item,
-            self._path_item,
-            self._marker_item,
-            self._current_position_item,
-            self._unreachable_item,
-            self._warning_item,
-            *self._axis_items,
-        ):
+        self._clear_waypoint_items()
+        self.clear_reachability()
+        for item in (self._scatter_item, self._current_position_item):
             if item is not None:
                 self.view.removeItem(item)
         self._scatter_item = None
-        self._path_item = None
-        self._marker_item = None
         self._current_position_item = None
-        self._unreachable_item = None
-        self._warning_item = None
-        self._axis_items = []
-        self._waypoint_positions = None
 
     def show_current_position(self, position_camera_frame: np.ndarray) -> None:
         """Show/update a marker for the robot's current TCP position (camera frame),
@@ -126,56 +115,89 @@ class PointCloudViewerWidget(QWidget):
         self.view.opts["center"] = pg.Vector(*centroid)
         self.view.setCameraPosition(distance=max(radius * 2.0, DEFAULT_CAMERA_DISTANCE_MM))
 
-    def show_waypoints(self, waypoints_camera_frame: List[TransformationMatrix]) -> None:
-        for item in (self._path_item, self._marker_item, *self._axis_items):
-            if item is not None:
-                self.view.removeItem(item)
-        self._path_item = None
-        self._marker_item = None
-        self._axis_items = []
-        # Verdicts belong to the waypoints that were just replaced, so they are dropped
-        # here rather than left pointing at indices of a path that no longer exists.
+    def show_waypoints(self, paths_camera_frame: Sequence[Sequence[TransformationMatrix]]) -> None:
+        """Draw one polyline per drawn path, with orientation axes on every waypoint.
+
+        Paths are kept apart on purpose: drawing a single line through all of them would put
+        a segment between the end of one and the start of the next, which is not a move the
+        robot makes along the surface - it retreats, travels, and approaches again.
+        """
+        self._clear_waypoint_items()
+        # Verdicts belong to the paths that were just replaced, so they are dropped here
+        # rather than left pointing at indices of paths that no longer exist.
         self.clear_reachability()
-        if len(waypoints_camera_frame) < 2:
+
+        positions_per_path = [
+            np.array([waypoint.translation for waypoint in path], dtype=np.float32)
+            for path in paths_camera_frame
+            if len(path) > 0
+        ]
+        if not positions_per_path:
             return
-        self._waypoint_positions = np.array([w.translation for w in waypoints_camera_frame], dtype=np.float32)
-        path_points = self._waypoint_positions
-        self._path_item = gl.GLLinePlotItem(pos=path_points, color=PATH_COLOR, width=4, antialias=True)
-        self.view.addItem(self._path_item)
+        self._path_positions = positions_per_path
+
+        for positions in positions_per_path:
+            if positions.shape[0] >= 2:
+                path_item = gl.GLLinePlotItem(pos=positions, color=PATH_COLOR, width=4, antialias=True)
+                self.view.addItem(path_item)
+                self._path_items.append(path_item)
+
+        all_positions = np.vstack(positions_per_path)
         self._marker_item = gl.GLScatterPlotItem(
-            pos=path_points, color=PATH_COLOR, size=WAYPOINT_MARKER_SIZE, pxMode=True
+            pos=all_positions, color=PATH_COLOR, size=WAYPOINT_MARKER_SIZE, pxMode=True
         )
         self.view.addItem(self._marker_item)
 
+        all_waypoints = [waypoint for path in paths_camera_frame for waypoint in path]
         for axis_index, color in ((0, AXIS_COLOR_X), (1, AXIS_COLOR_Y), (2, AXIS_COLOR_Z)):
-            axis_item = self._build_axis_item(waypoints_camera_frame, axis_index, color)
+            axis_item = self._build_axis_item(all_waypoints, axis_index, color)
             self.view.addItem(axis_item)
             self._axis_items.append(axis_item)
 
-    def show_reachability(self, unreachable_indices: List[int], warned_indices: List[int]) -> None:
+    def show_reachability(
+        self,
+        unreachable_indices: Sequence[Tuple[int, int]],
+        warned_indices: Sequence[Tuple[int, int]],
+    ) -> None:
         """Mark waypoints the robot cannot reach (red) and ones suspected of an arm
-        configuration flip (amber), by index into the path last passed to show_waypoints.
+        configuration flip (amber), addressed as (path index, waypoint index within it).
 
-        Indices outside the current path are ignored rather than raising: the path can be
-        regenerated between running a check and drawing its result.
+        Pairs that fall outside the paths currently shown are ignored rather than raising:
+        the paths can be regenerated between running a check and drawing its result.
         """
         self.clear_reachability()
-        if self._waypoint_positions is None:
+        if self._path_positions is None:
             return
-        count = self._waypoint_positions.shape[0]
-        # Red wins over amber - a waypoint the robot cannot reach at all should not be
-        # drawn as a mere warning if it somehow ends up in both lists.
-        unreachable = sorted({i for i in unreachable_indices if 0 <= i < count})
-        warned = sorted({i for i in warned_indices if 0 <= i < count} - set(unreachable))
 
-        if warned:
+        def positions_for(keys: Sequence[Tuple[int, int]]) -> List[np.ndarray]:
+            found = []
+            for path_index, waypoint_index in keys:
+                if not 0 <= path_index < len(self._path_positions):
+                    continue
+                positions = self._path_positions[path_index]
+                if 0 <= waypoint_index < positions.shape[0]:
+                    found.append(positions[waypoint_index])
+            return found
+
+        # Red wins over amber - a waypoint the robot cannot reach at all should not be drawn
+        # as a mere warning if it somehow ends up in both lists.
+        unreachable_keys = set(map(tuple, unreachable_indices))
+        warned_keys = set(map(tuple, warned_indices)) - unreachable_keys
+
+        warned_positions = positions_for(sorted(warned_keys))
+        if warned_positions:
             self._warning_item = gl.GLScatterPlotItem(
-                pos=self._waypoint_positions[warned], color=WARNING_COLOR, size=WARNING_MARKER_SIZE, pxMode=True
+                pos=np.array(warned_positions, dtype=np.float32),
+                color=WARNING_COLOR,
+                size=WARNING_MARKER_SIZE,
+                pxMode=True,
             )
             self.view.addItem(self._warning_item)
-        if unreachable:
+
+        unreachable_positions = positions_for(sorted(unreachable_keys))
+        if unreachable_positions:
             self._unreachable_item = gl.GLScatterPlotItem(
-                pos=self._waypoint_positions[unreachable],
+                pos=np.array(unreachable_positions, dtype=np.float32),
                 color=UNREACHABLE_COLOR,
                 size=UNREACHABLE_MARKER_SIZE,
                 pxMode=True,
@@ -189,8 +211,17 @@ class PointCloudViewerWidget(QWidget):
         self._unreachable_item = None
         self._warning_item = None
 
+    def _clear_waypoint_items(self) -> None:
+        for item in (self._marker_item, *self._path_items, *self._axis_items):
+            if item is not None:
+                self.view.removeItem(item)
+        self._marker_item = None
+        self._path_items = []
+        self._axis_items = []
+        self._path_positions = None
+
     def _build_axis_item(
-        self, waypoints_camera_frame: List[TransformationMatrix], axis_index: int, color
+        self, waypoints_camera_frame: Sequence[TransformationMatrix], axis_index: int, color
     ) -> gl.GLLinePlotItem:
         # One disjoint 2-point segment (origin -> tip) per waypoint, drawn in a single
         # GLLinePlotItem(mode="lines") rather than one item per waypoint.

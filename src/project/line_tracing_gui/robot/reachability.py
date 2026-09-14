@@ -8,6 +8,11 @@ exact sequence TracePanel executes ([home] -> approach -> waypoints -> retreat
 -> [home]) against the controller's own kinematics and safety model, without
 moving anything, and reports per-waypoint verdicts.
 
+Several drawn strokes become several independent paths, and the sequence repeats
+the middle for each: [home] -> (approach -> waypoints -> retreat) per path ->
+[home]. Every path gets its own approach and retreat, because travelling between
+two traced lines with the tip still down would drag it across the surface.
+
 What is asked of the controller, per pose:
 
 - ``has_inverse_kinematics_solution`` - the same call family move_j uses, so a
@@ -66,9 +71,12 @@ MOTION_LINEAR = "linear"  # moveL / movePath entry - TCP constrained to a straig
 class StepCheck:
     """Verdict for one step of the execution sequence."""
 
-    label: str  # e.g. "Home", "Approach", "Waypoint 12/87", "Retreat"
+    label: str  # e.g. "Home", "Approach", "Waypoint 12/87", "Path 2 waypoint 3/40", "Retreat"
     motion: str  # MOTION_JOINT or MOTION_LINEAR
-    waypoint_index: Optional[int] = None  # index into the caller's waypoint list, if it is one
+    # Which drawn path this step belongs to, and where in it. Both None for home, and
+    # path_index alone is set for that path's approach/retreat.
+    path_index: Optional[int] = None
+    waypoint_index: Optional[int] = None  # index within that path, if this step is a waypoint
     has_ik_solution: bool = True  # joints-only steps (home) need no IK
     pose_within_safety_limits: bool = True
     joints_within_safety_limits: bool = True
@@ -127,13 +135,22 @@ class ReachabilityReport:
     def ok(self) -> bool:
         return self.error is None and not self.failures
 
-    def failed_waypoint_indices(self) -> List[int]:
-        """Indices into the caller's waypoint list, for highlighting in the 3D view.
-        Approach/retreat/home carry no waypoint index and are left out."""
-        return [check.waypoint_index for check in self.failures if check.waypoint_index is not None]
+    @staticmethod
+    def _waypoint_keys(checks: List[StepCheck]) -> List[Tuple[int, int]]:
+        return [
+            (check.path_index, check.waypoint_index)
+            for check in checks
+            if check.path_index is not None and check.waypoint_index is not None
+        ]
 
-    def warned_waypoint_indices(self) -> List[int]:
-        return [check.waypoint_index for check in self.warnings if check.waypoint_index is not None]
+    def failed_waypoint_indices(self) -> List[Tuple[int, int]]:
+        """(path index, waypoint index within that path) for every failing waypoint, so the
+        3D view and the projector can mark them. Approach/retreat/home carry no waypoint
+        index and are left out - there is nothing on the drawn line to point at."""
+        return self._waypoint_keys(self.failures)
+
+    def warned_waypoint_indices(self) -> List[Tuple[int, int]]:
+        return self._waypoint_keys(self.warnings)
 
     def summary(self) -> str:
         if self.error is not None:
@@ -167,31 +184,32 @@ def _max_joint_step_deg(previous: Optional[Sequence[float]], current: Optional[S
     return float(np.max(np.abs(np.degrees(np.asarray(current, dtype=float) - np.asarray(previous, dtype=float)))))
 
 
-def check_path_reachability(
+def check_paths_reachability(
     robot_control,
-    waypoints: List[TransformationMatrix],
-    approach_pose: TransformationMatrix,
-    retreat_pose: TransformationMatrix,
+    paths: Sequence[Sequence[TransformationMatrix]],
+    approach_poses: Sequence[TransformationMatrix],
+    retreat_poses: Sequence[TransformationMatrix],
     home_joints: Optional[List[float]] = None,
     joint_step_warning_deg: float = DEFAULT_JOINT_STEP_WARNING_DEG,
     progress_callback: Optional[Callable[[int, int], None]] = None,
 ) -> ReachabilityReport:
     """Vet the whole execution sequence without moving the robot.
 
-    The sequence checked mirrors TracePanel's execution exactly: an optional home leg,
-    approach (moveJ), the waypoints (movePath, so linear from the approach pose onward),
-    retreat (moveJ), and the optional return home. Keep the two in step - a check that
-    models a different sequence is worse than no check, because it invites trust it has
-    not earned.
+    The sequence checked mirrors TracePanel's execution exactly: an optional home leg, then
+    for every drawn path an approach (moveJ), that path's waypoints (movePath, so linear from
+    its approach pose onward) and a retreat (moveJ), and finally the optional return home.
+    Keep the two in step - a check that models a different sequence is worse than no check,
+    because it invites trust it has not earned.
 
     Args:
         robot_control: Connected robot. Only these five methods are used, so a stand-in
             can be passed for offline testing: get_joint_positions,
             has_inverse_kinematics_solution, get_inverse_kinematics,
             is_pose_within_safety_limits, is_joints_within_safety_limits.
-        waypoints: The traced path, base frame, in order.
-        approach_pose: Standoff pose the robot moves to before the trace.
-        retreat_pose: Standoff pose the robot moves to after the trace.
+        paths: One list of base-frame waypoints per drawn stroke, in drawing order. Entries
+            with fewer than 2 waypoints are skipped - there is nothing to trace between.
+        approach_poses: Standoff pose before each path - one per entry in `paths`.
+        retreat_poses: Standoff pose after each path - one per entry in `paths`.
         home_joints: Home/start posture as joint angles (rad), or None if none is set.
         joint_step_warning_deg: Per-joint change along a linear segment above which an arm
             configuration flip is suspected.
@@ -204,22 +222,39 @@ def check_path_reachability(
         surface them the same way as a negative verdict.
     """
     report = ReachabilityReport(joint_step_warning_deg=joint_step_warning_deg)
-    if len(waypoints) < 2:
-        report.error = "There are fewer than 2 waypoints to check."
+    if not (len(approach_poses) == len(retreat_poses) == len(paths)):
+        report.error = (
+            f"Got {len(paths)} paths but {len(approach_poses)} approach and "
+            f"{len(retreat_poses)} retreat poses."
+        )
+        return report
+    usable = [index for index, path in enumerate(paths) if len(path) >= 2]
+    if not usable:
+        report.error = "There is no path with at least 2 waypoints to check."
         return report
 
     # Steps to check, in execution order: (label, pose or None for a joints-only step,
-    # motion kind, waypoint index or None).
-    steps: List[Tuple[str, Optional[TransformationMatrix], str, Optional[int]]] = []
+    # motion kind, path index or None, waypoint index or None).
+    steps: List[Tuple[str, Optional[TransformationMatrix], str, Optional[int], Optional[int]]] = []
     if home_joints is not None:
-        steps.append(("Home", None, MOTION_JOINT, None))
-    steps.append(("Approach", approach_pose, MOTION_JOINT, None))
-    total = len(waypoints)
-    for index, waypoint in enumerate(waypoints):
-        steps.append((f"Waypoint {index + 1}/{total}", waypoint, MOTION_LINEAR, index))
-    steps.append(("Retreat", retreat_pose, MOTION_JOINT, None))
+        steps.append(("Home", None, MOTION_JOINT, None, None))
+    # A single path keeps the plain labels; the "Path n" prefix only earns its place on
+    # screen once there is more than one path to tell apart.
+    prefixed = len(usable) > 1
+    for path_index in usable:
+        path = paths[path_index]
+        prefix = f"Path {path_index + 1} " if prefixed else ""
+        approach_label = f"{prefix}approach" if prefixed else "Approach"
+        retreat_label = f"{prefix}retreat" if prefixed else "Retreat"
+        steps.append((approach_label, approach_poses[path_index], MOTION_JOINT, path_index, None))
+        total = len(path)
+        for waypoint_index, waypoint in enumerate(path):
+            number = f"{waypoint_index + 1}/{total}"
+            label = f"{prefix}waypoint {number}" if prefixed else f"Waypoint {number}"
+            steps.append((label, waypoint, MOTION_LINEAR, path_index, waypoint_index))
+        steps.append((retreat_label, retreat_poses[path_index], MOTION_JOINT, path_index, None))
     if home_joints is not None:
-        steps.append(("Home (return)", None, MOTION_JOINT, None))
+        steps.append(("Home (return)", None, MOTION_JOINT, None, None))
 
     try:
         # Seed qnear with where the robot will actually stand when the sequence starts.
@@ -227,7 +262,7 @@ def check_path_reachability(
             list(home_joints) if home_joints is not None else list(robot_control.get_joint_positions())
         )
 
-        for completed, (label, pose, motion, waypoint_index) in enumerate(steps):
+        for completed, (label, pose, motion, path_index, waypoint_index) in enumerate(steps):
             if pose is None:  # home: moved to by joint angles, so there is no IK to solve
                 assert home_joints is not None
                 home = list(home_joints)
@@ -247,6 +282,7 @@ def check_path_reachability(
                 check = StepCheck(
                     label=label,
                     motion=motion,
+                    path_index=path_index,
                     waypoint_index=waypoint_index,
                     has_ik_solution=has_solution,
                     pose_within_safety_limits=bool(robot_control.is_pose_within_safety_limits(pose)),

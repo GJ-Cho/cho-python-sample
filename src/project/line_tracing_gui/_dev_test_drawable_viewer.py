@@ -68,9 +68,10 @@ class DevTestWindow(QMainWindow):
         button.setText(f"Draw mode: {'ON' if checked else 'OFF (pan/zoom)'} (click to toggle)")
 
     def _print_points(self) -> None:
-        points = self.viewer.get_line_points()
-        print(f"{len(points)} points:")
-        print(points)
+        strokes = self.viewer.get_strokes()
+        print(f"{len(strokes)} stroke(s), {sum(len(s) for s in strokes)} points total:")
+        for index, stroke in enumerate(strokes):
+            print(f"  [{index}] {len(stroke)} points: {stroke}")
 
 
 def _main() -> None:

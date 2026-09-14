@@ -31,6 +31,10 @@ Limits worth knowing before trusting a compensated projection from far away:
   outside its resolution. Both are dropped here, and the line is broken rather
   than bridged across the gap - a straight segment drawn over a dropped stretch
   would be a line the waypoints never described.
+- Each drawn path is rendered independently, for the same reason: nothing is
+  ever drawn between the end of one path and the start of the next, because the
+  robot does not travel that way either - it retreats, moves, and approaches
+  again.
 - The projector has a fixed focus. Moving far from the capture distance blurs
   the line even when the geometry is right.
 
@@ -92,16 +96,18 @@ class ProjectorImageResult:
     drawn_waypoint_count: int
     skipped_waypoint_count: int  # NaN, or mapped outside the projector's resolution
     segment_count: int  # line segments actually drawn (gaps break the line, so this can be < N-1)
+    path_count: int = 1  # drawn paths the image covers
 
     def summary(self) -> str:
+        where = f"{self.path_count} paths" if self.path_count > 1 else "the line"
         if self.drawn_waypoint_count == 0:
             return "No waypoint could be projected - none of them fall inside the projector's field of view."
         if self.skipped_waypoint_count:
             return (
-                f"Projecting {self.drawn_waypoint_count} waypoints; {self.skipped_waypoint_count} fall outside "
-                "the projector's field of view and are left out."
+                f"Projecting {where}, {self.drawn_waypoint_count} waypoints; "
+                f"{self.skipped_waypoint_count} fall outside the projector's field of view and are left out."
             )
-        return f"Projecting {self.drawn_waypoint_count} waypoints."
+        return f"Projecting {where}, {self.drawn_waypoint_count} waypoints."
 
 
 def _valid_pixel_mask(pixels: np.ndarray, resolution_height_width: Tuple[int, int]) -> np.ndarray:
@@ -164,19 +170,21 @@ def _segment_runs(valid: np.ndarray, verdicts: Sequence[str]) -> List[Tuple[str,
 
 def build_projector_image(
     camera: zivid.Camera,
-    points_camera_frame: np.ndarray,
-    verdicts: Optional[Sequence[str]] = None,
+    paths_camera_frame: Sequence[np.ndarray],
+    verdicts: Optional[Sequence[Sequence[str]]] = None,
     resolution_height_width: Optional[Tuple[int, int]] = None,
     pixel_mapper: Optional[Callable[[zivid.Camera, np.ndarray], np.ndarray]] = None,
 ) -> ProjectorImageResult:
-    """Render the waypoint path as an image for the camera's projector.
+    """Render the drawn paths as one image for the camera's projector.
 
     Args:
         camera: Connected Zivid camera whose projector will show the image.
-        points_camera_frame: Nx3 waypoint positions (mm) **in the camera's frame** - i.e.
-            already mapped back through whichever camera-to-base transform the caller wants
-            to put under test (see the module docstring).
-        verdicts: One VERDICT_* per point, deciding its colour. Defaults to all
+        paths_camera_frame: One Nx3 array of waypoint positions (mm) per drawn path, **in
+            the camera's frame** - i.e. already mapped back through whichever camera-to-base
+            transform the caller wants to put under test (see the module docstring). Paths
+            are drawn independently, so the line is never carried from the end of one to the
+            start of the next.
+        verdicts: One VERDICT_* per point, as a list per path. Defaults to all
             VERDICT_UNCHECKED, which is what should be shown before a reachability check.
         resolution_height_width: Projector resolution as (height, width). Read from the
             camera when not given.
@@ -185,57 +193,76 @@ def build_projector_image(
             can be exercised without a camera (see _dev_test_projection.py).
 
     Raises:
-        ValueError: if the point array is not Nx3, or verdicts has a different length.
+        ValueError: if there are no points at all, or if verdicts do not line up with the
+            paths they describe.
     """
-    points = np.asarray(points_camera_frame, dtype=np.float32).reshape(-1, 3)
-    if points.shape[0] == 0:
+    paths = [np.asarray(path, dtype=np.float32).reshape(-1, 3) for path in paths_camera_frame]
+    point_count = sum(path.shape[0] for path in paths)
+    if point_count == 0:
         raise ValueError("No points to project.")
     if verdicts is None:
-        verdicts = [VERDICT_UNCHECKED] * points.shape[0]
-    if len(verdicts) != points.shape[0]:
-        raise ValueError(f"Got {len(verdicts)} verdicts for {points.shape[0]} points.")
+        verdicts = [[VERDICT_UNCHECKED] * path.shape[0] for path in paths]
+    if len(verdicts) != len(paths):
+        raise ValueError(f"Got {len(verdicts)} verdict lists for {len(paths)} paths.")
+    for index, (path, path_verdicts) in enumerate(zip(paths, verdicts)):
+        if len(path_verdicts) != path.shape[0]:
+            raise ValueError(
+                f"Path {index + 1}: got {len(path_verdicts)} verdicts for {path.shape[0]} points."
+            )
 
     if resolution_height_width is None:
         resolution_height_width = tuple(zivid.projection.projector_resolution(camera))
     if pixel_mapper is None:
         pixel_mapper = zivid.projection.pixels_from_3d_points
 
-    pixels = np.asarray(pixel_mapper(camera, points), dtype=float).reshape(-1, 2)
+    # One mapping call for every path at once - each is a round trip to the camera - then
+    # split the answer back up by path length.
+    pixels = np.asarray(pixel_mapper(camera, np.vstack(paths)), dtype=float).reshape(-1, 2)
     valid = _valid_pixel_mask(pixels, resolution_height_width)
+    integer_pixels = np.round(np.where(np.isnan(pixels), 0.0, pixels)).astype(np.int32)
 
     height, width = resolution_height_width
     image = np.full((height, width, len(BACKGROUND_BGRA)), BACKGROUND_BGRA, dtype=np.uint8)
-
-    integer_pixels = np.round(np.where(np.isnan(pixels), 0.0, pixels)).astype(np.int32)
     # Constructed here rather than at import time: this is what pulls cv2 in, and it must
     # not happen until after ZividQtApplication exists (see the module docstring).
     cv2_handler = CV2Handler()
 
     segment_count = 0
-    for color_name, indices in _segment_runs(valid, verdicts):
-        cv2_handler.draw_polygons(
-            image,
-            integer_pixels[indices],
-            color=VERDICT_COLORS_BGRA.get(color_name, VERDICT_COLORS_BGRA[VERDICT_UNCHECKED]),
-            isClosed=False,
-            thickness=LINE_THICKNESS_PX,
-        )
-        segment_count += len(indices) - 1
+    offset = 0
+    for path, path_verdicts in zip(paths, verdicts):
+        count = path.shape[0]
+        path_pixels = integer_pixels[offset : offset + count]
+        path_valid = valid[offset : offset + count]
+        offset += count
 
-    # Dots take each waypoint's *own* verdict, unlike the segments around it - so the exact
-    # waypoint the robot cannot reach is marked, not just the stretch leading up to it. Drawn
-    # after the lines so a red dot stays visible where a green segment runs into it.
-    for verdict, color in VERDICT_COLORS_BGRA.items():
-        matching = [
-            index for index in range(len(verdicts)) if valid[index] and verdicts[index] == verdict
-        ]
-        if matching:
-            cv2_handler.draw_circles(image, integer_pixels[matching], circle_color=color)
+        for color_name, indices in _segment_runs(path_valid, path_verdicts):
+            cv2_handler.draw_polygons(
+                image,
+                path_pixels[indices],
+                color=VERDICT_COLORS_BGRA.get(color_name, VERDICT_COLORS_BGRA[VERDICT_UNCHECKED]),
+                isClosed=False,
+                thickness=LINE_THICKNESS_PX,
+            )
+            segment_count += len(indices) - 1
+
+        # Dots take each waypoint's *own* verdict, unlike the segments around it - so the
+        # exact waypoint the robot cannot reach is marked, not just the stretch leading up
+        # to it. Drawn after the lines so a red dot stays visible where a green segment runs
+        # into it.
+        for verdict, color in VERDICT_COLORS_BGRA.items():
+            matching = [
+                index
+                for index in range(count)
+                if path_valid[index] and path_verdicts[index] == verdict
+            ]
+            if matching:
+                cv2_handler.draw_circles(image, path_pixels[matching], circle_color=color)
 
     drawn = int(np.count_nonzero(valid))
     return ProjectorImageResult(
         image_bgra=image,
         drawn_waypoint_count=drawn,
-        skipped_waypoint_count=int(points.shape[0] - drawn),
+        skipped_waypoint_count=int(point_count - drawn),
         segment_count=segment_count,
+        path_count=len(paths),
     )

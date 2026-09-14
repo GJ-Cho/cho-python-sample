@@ -46,8 +46,8 @@ from line_tracing_gui.geometry.projection import (
     VERDICT_WARNING,
     build_projector_image,
 )
-from line_tracing_gui.geometry.waypoint_builder import DEFAULT_SAMPLE_SPACING_MM, build_waypoints
-from line_tracing_gui.robot.reachability import ReachabilityReport, check_path_reachability
+from line_tracing_gui.geometry.waypoint_builder import DEFAULT_SAMPLE_SPACING_MM, build_paths
+from line_tracing_gui.robot.reachability import ReachabilityReport, check_paths_reachability
 from line_tracing_gui.robot.robot_control_ur_rtde import DEFAULT_JOINT_ACCELERATION, DEFAULT_JOINT_SPEED
 from line_tracing_gui.theme import mark_as_accent, mark_as_danger
 from line_tracing_gui.widgets.calibration_panel import CalibrationPanel
@@ -108,7 +108,9 @@ class TracePanel(QWidget):
         self.config = AppConfig()
         self.point_cloud_xyz: Optional[np.ndarray] = None
         self.point_cloud_rgb: Optional[np.ndarray] = None
-        self.waypoints: List[TransformationMatrix] = []  # base frame, set by on_generate_waypoints_clicked
+        # One list of base-frame waypoints per drawn stroke, in drawing order. Strokes stay
+        # separate all the way through - see geometry.waypoint_builder.build_paths.
+        self.paths: List[List[TransformationMatrix]] = []
         # Verdicts for exactly the waypoints above; dropped whenever they are regenerated so
         # the 3D highlight and the projector colours can never describe a stale path.
         self.reachability_report: Optional[ReachabilityReport] = None
@@ -144,17 +146,24 @@ class TracePanel(QWidget):
         mark_as_accent(self.capture_button)
         self.capture_button.clicked.connect(self.on_capture_clicked)
 
-        self.draw_mode_button = QPushButton("Draw Line")
+        self.draw_mode_button = QPushButton("Draw Lines")
         self.draw_mode_button.setCheckable(True)
         self.draw_mode_button.setEnabled(False)
+        self.draw_mode_button.setToolTip(
+            "Draw on the captured image. Every press-drag-release is one line, and each one\n"
+            "becomes its own robot path - the robot lifts off the surface between them rather\n"
+            "than tracing from the end of one to the start of the next."
+        )
         self.draw_mode_button.toggled.connect(self.on_draw_mode_toggled)
 
         self.clear_button = QPushButton("Clear")
         self.clear_button.setEnabled(False)
+        self.clear_button.setToolTip("Remove every line drawn so far.")
         self.clear_button.clicked.connect(self.on_clear_clicked)
 
         self.undo_button = QPushButton("Undo")
         self.undo_button.setEnabled(False)
+        self.undo_button.setToolTip("Remove the line drawn most recently.")
         self.undo_button.clicked.connect(self.on_undo_clicked)
 
         self.status_label_2d = QLabel("Connect a camera and capture.")
@@ -169,7 +178,7 @@ class TracePanel(QWidget):
         buttons_layout.addWidget(self.undo_button)
         buttons_layout.addStretch(1)  # buttons keep their natural width instead of filling the row
 
-        group_box = QGroupBox("2D Capture / Draw Line")
+        group_box = QGroupBox("2D Capture / Draw Lines")
         group_layout = QVBoxLayout()
         group_layout.addLayout(buttons_layout)
         group_layout.addWidget(self.status_label_2d)
@@ -188,6 +197,11 @@ class TracePanel(QWidget):
         )
 
         self.generate_waypoints_button = QPushButton("Generate Waypoints")
+        self.generate_waypoints_button.setToolTip(
+            "Turn every drawn line into its own robot path. Lines are never joined up:\n"
+            "resampling across the gap between two of them would put waypoints on surface\n"
+            "nobody drew on."
+        )
         mark_as_accent(self.generate_waypoints_button)
         self.generate_waypoints_button.setEnabled(False)
         self.generate_waypoints_button.clicked.connect(self.on_generate_waypoints_clicked)
@@ -360,7 +374,7 @@ class TracePanel(QWidget):
             return
 
         self.point_cloud_rgb = rgba
-        self.waypoints = []
+        self.paths = []
 
         # Eye-in-hand turns a camera-frame point into a base-frame one through the robot's
         # pose at capture time, and the robot stood still for the capture we just took - so
@@ -396,7 +410,7 @@ class TracePanel(QWidget):
 
     def on_draw_mode_toggled(self, checked: bool) -> None:
         self.image_viewer.set_draw_mode(checked)
-        self.draw_mode_button.setText("Stop Drawing" if checked else "Draw Line")
+        self.draw_mode_button.setText("Stop Drawing" if checked else "Draw Lines")
 
     def on_clear_clicked(self) -> None:
         self.image_viewer.clear_line()
@@ -410,9 +424,9 @@ class TracePanel(QWidget):
         if self.point_cloud_xyz is None:
             QMessageBox.warning(self, "Generate Waypoints", "Capture first.")
             return
-        line_points_px = self.image_viewer.get_line_points()
-        if len(line_points_px) < 2:
-            QMessageBox.warning(self, "Generate Waypoints", "Draw a line first.")
+        strokes_px = self.image_viewer.get_strokes()
+        if not strokes_px:
+            QMessageBox.warning(self, "Generate Waypoints", "Draw at least one line first.")
             return
 
         hand_eye_transform = self.calibration_panel.get_hand_eye_transform()
@@ -429,8 +443,8 @@ class TracePanel(QWidget):
             return
 
         try:
-            result = build_waypoints(
-                line_points_px,
+            result = build_paths(
+                strokes_px,
                 self.point_cloud_xyz,
                 hand_eye_transform,
                 eye_in_hand=eye_in_hand,
@@ -441,31 +455,39 @@ class TracePanel(QWidget):
             QMessageBox.warning(self, "Generate Waypoints", str(ex))
             return
 
-        if len(result.waypoints) < 2:
+        if not result.paths:
             QMessageBox.warning(
                 self,
                 "Generate Waypoints",
-                f"Only {len(result.waypoints)} valid waypoint(s) (skipped {result.skipped_pixel_count}).\n"
-                "Check that the line lies over valid 3D data.",
+                f"None of the {len(strokes_px)} line(s) drawn produced a traceable path "
+                f"(skipped {result.skipped_pixel_count} point(s)).\n"
+                "Check that the lines lie over valid 3D data.",
             )
             return
 
-        self.waypoints = result.waypoints
+        self.paths = result.paths
         # Both the reachability verdicts and the projected line describe the previous path.
         self.reachability_report = None
         self._stop_projection()
+        line_count = f"{len(result.paths)} lines" if len(result.paths) > 1 else "1 line"
+        dropped = (
+            f", dropped {result.dropped_stroke_count} line(s) with too little 3D data"
+            if result.dropped_stroke_count
+            else ""
+        )
         self.status_label_3d.setText(
-            f"Generated {len(result.waypoints)} waypoints "
-            f"(skipped {result.skipped_pixel_count}, merged {result.merged_close_waypoint_count} too close together)"
-            f" - {self._transform_chain_description()}"
+            f"Generated {result.waypoint_count} waypoints over {line_count} "
+            f"(skipped {result.skipped_pixel_count}, merged {result.merged_close_waypoint_count} too close "
+            f"together{dropped}) - {self._transform_chain_description()}"
         )
         self._auto_adjust_blend_spinbox()
 
         # The 3D view is drawn in camera frame (matching the point cloud); undo the
         # camera-to-base transform to get each waypoint back from base frame for display.
-        camera_to_base_transform = self._camera_to_base_transform()
-        camera_frame_waypoints = [camera_to_base_transform.inv() * waypoint for waypoint in self.waypoints]
-        self.pointcloud_viewer.show_waypoints(camera_frame_waypoints)
+        camera_frame_transform = self._camera_to_base_transform().inv()
+        self.pointcloud_viewer.show_waypoints(
+            [[camera_frame_transform * waypoint for waypoint in path] for path in self.paths]
+        )
         self._update_execute_button_state()
 
     def _transform_chain_description(self) -> str:
@@ -502,10 +524,13 @@ class TracePanel(QWidget):
             return hand_eye_transform
         return capture_pose * hand_eye_transform
 
+    def _total_waypoint_count(self) -> int:
+        return sum(len(path) for path in self.paths)
+
     def _update_execute_button_state(self) -> None:
         # The reachability check needs exactly what execution needs - waypoints and a live
         # robot to ask - so the two buttons share one enabling rule.
-        has_waypoints = len(self.waypoints) >= 2
+        has_waypoints = bool(self.paths)
         ready = has_waypoints and self.robot_connection_widget.connected
         self.execute_button.setEnabled(ready)
         self.check_reachability_button.setEnabled(ready)
@@ -614,12 +639,18 @@ class TracePanel(QWidget):
         # along local -Z backs the tool away from the surface, towards the camera side.
         return TransformationMatrix(translation=np.array([0.0, 0.0, -self.approach_spinbox.value()], dtype=np.float32))
 
-    def _approach_retreat_poses(self) -> "tuple[TransformationMatrix, TransformationMatrix]":
-        """Standoff poses either side of the traced line. Shared by the reachability check
-        and by execution so the check can never vet a different pair than the one that
-        actually runs."""
+    def _approach_retreat_poses(self) -> "tuple[List[TransformationMatrix], List[TransformationMatrix]]":
+        """Standoff poses either side of every traced line, one pair per path.
+
+        Each path gets its own pair because the robot has to lift off the surface to travel
+        from one line to the next - moving across with the tip still down would drag it over
+        the part. Shared by the reachability check and by execution so the check can never
+        vet a different set than the one that actually runs.
+        """
         approach_offset = self._approach_offset()
-        return self.waypoints[0] * approach_offset, self.waypoints[-1] * approach_offset
+        approaches = [path[0] * approach_offset for path in self.paths]
+        retreats = [path[-1] * approach_offset for path in self.paths]
+        return approaches, retreats
 
     # --- Reachability check ----------------------------------------------------------------
 
@@ -632,7 +663,7 @@ class TracePanel(QWidget):
         the caller blocks on that queue, so a worker that dies silently would hang the GUI.
         """
         try:
-            report = check_path_reachability(
+            report = check_paths_reachability(
                 progress_callback=lambda completed, total: self.reachability_progress.emit(completed, total),
                 **check_kwargs,
             )
@@ -641,14 +672,16 @@ class TracePanel(QWidget):
         result_queue.put(report)
 
     def _perform_reachability_check(
-        self, approach_pose: TransformationMatrix, retreat_pose: TransformationMatrix
+        self,
+        approach_poses: List[TransformationMatrix],
+        retreat_poses: List[TransformationMatrix],
     ) -> Optional[ReachabilityReport]:
         """Run the check on a worker thread, keeping the UI responsive, and paint the result
         onto the 3D view. Returns None only if the robot is not connected.
 
-        The approach/retreat pair is passed in rather than derived here so the caller can hand
-        the very same objects to execution - a check that vetted a different pair than the one
-        that runs would invite trust it has not earned.
+        The approach/retreat poses are passed in rather than derived here so the caller can
+        hand the very same objects to execution - a check that vetted a different set than the
+        one that runs would invite trust it has not earned.
         """
         robot_control = self.robot_connection_widget.robot_control
         if robot_control is None:
@@ -666,9 +699,9 @@ class TracePanel(QWidget):
         # Read every input here, on the GUI thread, and hand them over as plain values.
         check_kwargs = {
             "robot_control": robot_control,
-            "waypoints": list(self.waypoints),
-            "approach_pose": approach_pose,
-            "retreat_pose": retreat_pose,
+            "paths": [list(path) for path in self.paths],
+            "approach_poses": list(approach_poses),
+            "retreat_poses": list(retreat_poses),
             "home_joints": self.config.home_joints(),
         }
 
@@ -691,7 +724,7 @@ class TracePanel(QWidget):
         return report
 
     def on_check_reachability_clicked(self) -> None:
-        if len(self.waypoints) < 2:
+        if not self.paths:
             return
         report = self._perform_reachability_check(*self._approach_retreat_poses())
         if report is None:
@@ -713,25 +746,30 @@ class TracePanel(QWidget):
 
     # --- Projector overlay -----------------------------------------------------------------
 
-    def _waypoint_verdicts(self) -> List[str]:
+    def _waypoint_verdicts(self) -> List[List[str]]:
         """One projector colour per waypoint, from the last reachability check.
 
-        The report is dropped whenever the waypoints are regenerated, so it either describes
-        exactly this path or is absent - there is no stale-index case to guard against here.
+        Shaped like self.paths: one list of verdicts per path. The report is dropped whenever
+        the paths are regenerated, so it either describes exactly these paths or is absent -
+        there is no stale-index case to guard against here.
         """
         report = self.reachability_report
         if report is None or report.error is not None:
-            return [VERDICT_UNCHECKED] * len(self.waypoints)
+            return [[VERDICT_UNCHECKED] * len(path) for path in self.paths]
         unreachable = set(report.failed_waypoint_indices())
         warned = set(report.warned_waypoint_indices())
         verdicts = []
-        for index in range(len(self.waypoints)):
-            if index in unreachable:
-                verdicts.append(VERDICT_UNREACHABLE)
-            elif index in warned:
-                verdicts.append(VERDICT_WARNING)
-            else:
-                verdicts.append(VERDICT_OK)
+        for path_index, path in enumerate(self.paths):
+            path_verdicts = []
+            for waypoint_index in range(len(path)):
+                key = (path_index, waypoint_index)
+                if key in unreachable:
+                    path_verdicts.append(VERDICT_UNREACHABLE)
+                elif key in warned:
+                    path_verdicts.append(VERDICT_WARNING)
+                else:
+                    path_verdicts.append(VERDICT_OK)
+            verdicts.append(path_verdicts)
         return verdicts
 
     @staticmethod
@@ -858,7 +896,7 @@ class TracePanel(QWidget):
         camera = self.camera_panel.camera
         if camera is None or not camera.state.connected:
             return "Connect a camera first."
-        if len(self.waypoints) < 2:
+        if not self.paths:
             return "Generate waypoints first."
 
         camera_to_base_transform = self._camera_to_base_for_projection()
@@ -871,11 +909,14 @@ class TracePanel(QWidget):
         self.camera_panel.update_capture_button_state()
 
         camera_frame_transform = camera_to_base_transform.inv()
-        points_camera_frame = np.array(
-            [(camera_frame_transform * waypoint).translation for waypoint in self.waypoints], dtype=np.float32
-        )
+        paths_camera_frame = [
+            np.array(
+                [(camera_frame_transform * waypoint).translation for waypoint in path], dtype=np.float32
+            )
+            for path in self.paths
+        ]
         try:
-            result = build_projector_image(camera, points_camera_frame, verdicts=self._waypoint_verdicts())
+            result = build_projector_image(camera, paths_camera_frame, verdicts=self._waypoint_verdicts())
             if result.drawn_waypoint_count == 0:
                 return result.summary()
             self._projected_image = zivid.projection.show_image_bgra(camera, result.image_bgra)
@@ -916,9 +957,9 @@ class TracePanel(QWidget):
         self,
         result_queue: "queue.Queue",
         robot_control,
-        waypoints: List[TransformationMatrix],
-        approach_pose: TransformationMatrix,
-        retreat_pose: TransformationMatrix,
+        paths: List[List[TransformationMatrix]],
+        approach_poses: List[TransformationMatrix],
+        retreat_poses: List[TransformationMatrix],
         speed_m_s: float,
         acceleration: float,
         blend_m: float,
@@ -943,37 +984,48 @@ class TracePanel(QWidget):
                     robot_control, robot_control.move_to_joints, home_joints,
                     speed=DEFAULT_JOINT_SPEED, acceleration=DEFAULT_JOINT_ACCELERATION,
                 )
-            self._move_with_monitoring(
-                robot_control, robot_control.move_j, robot_control.get_custom_target(approach_pose),
-                speed=DEFAULT_JOINT_SPEED, acceleration=DEFAULT_JOINT_ACCELERATION,
-            )
-            self._move_with_monitoring(
-                robot_control, robot_control.move_path, waypoints,
-                speed=speed_m_s, acceleration=acceleration, blend_radius=blend_m,
-            )
-            self._move_with_monitoring(
-                robot_control, robot_control.move_j, robot_control.get_custom_target(retreat_pose),
-                speed=DEFAULT_JOINT_SPEED, acceleration=DEFAULT_JOINT_ACCELERATION,
-            )
+            # Every path is approached and retreated on its own. Travelling from the end of
+            # one line to the start of the next has to happen off the surface, or the tip
+            # drags across the part on the way.
+            for path, approach_pose, retreat_pose in zip(paths, approach_poses, retreat_poses):
+                self._move_with_monitoring(
+                    robot_control, robot_control.move_j, robot_control.get_custom_target(approach_pose),
+                    speed=DEFAULT_JOINT_SPEED, acceleration=DEFAULT_JOINT_ACCELERATION,
+                )
+                self._move_with_monitoring(
+                    robot_control, robot_control.move_path, path,
+                    speed=speed_m_s, acceleration=acceleration, blend_radius=blend_m,
+                )
+                self._move_with_monitoring(
+                    robot_control, robot_control.move_j, robot_control.get_custom_target(retreat_pose),
+                    speed=DEFAULT_JOINT_SPEED, acceleration=DEFAULT_JOINT_ACCELERATION,
+                )
             if home_joints is not None:
                 self._move_with_monitoring(
                     robot_control, robot_control.move_to_joints, home_joints,
                     speed=DEFAULT_JOINT_SPEED, acceleration=DEFAULT_JOINT_ACCELERATION,
                 )
-            result_queue.put((True, f"Done - {len(waypoints)} waypoints"))
+            traced = f"{len(paths)} lines" if len(paths) > 1 else "1 line"
+            result_queue.put((True, f"Done - {traced}, {sum(len(path) for path in paths)} waypoints"))
         except Exception as ex:  # pylint: disable=broad-except
             result_queue.put((False, str(ex)))
 
     def _min_waypoint_spacing_mm(self) -> float:
-        if len(self.waypoints) < 2:
-            return float("inf")
-        return min(
+        """Tightest gap between neighbouring waypoints anywhere in any path.
+
+        Measured within paths only: the jump from the end of one line to the start of the
+        next is not a blended segment - the robot retreats and approaches - so it has no say
+        in how large a blend radius is safe.
+        """
+        gaps = [
             float(np.linalg.norm(b.translation - a.translation))
-            for a, b in zip(self.waypoints[:-1], self.waypoints[1:])
-        )
+            for path in self.paths
+            for a, b in zip(path[:-1], path[1:])
+        ]
+        return min(gaps) if gaps else float("inf")
 
     def on_execute_clicked(self) -> None:
-        if len(self.waypoints) < 2:
+        if not self.paths:
             return
         robot_control = self.robot_connection_widget.robot_control
         if robot_control is None:
@@ -1003,8 +1055,8 @@ class TracePanel(QWidget):
         # the worst place to stop and the hardest to recover from - so an unreachable pose
         # blocks execution outright, while the heuristic configuration-flip warnings only
         # get surfaced in the confirmation below for the user to weigh.
-        approach_pose, retreat_pose = self._approach_retreat_poses()
-        report = self._perform_reachability_check(approach_pose, retreat_pose)
+        approach_poses, retreat_poses = self._approach_retreat_poses()
+        report = self._perform_reachability_check(approach_poses, retreat_poses)
         if report is None:
             return
         if report.error is not None:
@@ -1027,16 +1079,16 @@ class TracePanel(QWidget):
         )
 
         has_home = self.config.home_joints() is not None
-        sequence = (
-            "home → approach (moveJ) → line tracing → retreat (moveJ) → home"
-            if has_home
-            else "approach (moveJ) → line tracing → retreat (moveJ)  (no home set)"
-        )
+        per_line = "approach (moveJ) → line tracing → retreat (moveJ)"
+        if len(self.paths) > 1:
+            per_line = f"[ {per_line} ] × {len(self.paths)} lines"
+        sequence = f"home → {per_line} → home" if has_home else f"{per_line}  (no home set)"
+
         confirm = QMessageBox.question(
             self,
             "Confirm Execution",
             f"{warning_note}Sequence: {sequence}\n"
-            f"{len(self.waypoints)} waypoints, speed {self.speed_spinbox.value():.0f} mm/s, "
+            f"{self._total_waypoint_count()} waypoints, speed {self.speed_spinbox.value():.0f} mm/s, "
             f"acceleration {self.acceleration_spinbox.value():.2f} m/s², "
             f"approach/retreat {self.approach_spinbox.value():.0f} mm\n\n"
             "The gripper tip is sharp - keep clear of the robot and be ready to hit the "
@@ -1061,9 +1113,9 @@ class TracePanel(QWidget):
         # thread, and handed to the worker as a plain value.
         execution_kwargs = {
             "robot_control": robot_control,
-            "waypoints": list(self.waypoints),
-            "approach_pose": approach_pose,
-            "retreat_pose": retreat_pose,
+            "paths": [list(path) for path in self.paths],
+            "approach_poses": approach_poses,
+            "retreat_poses": retreat_poses,
             "speed_m_s": self.speed_spinbox.value() / 1000.0,
             "acceleration": self.acceleration_spinbox.value(),
             "blend_m": self.blend_spinbox.value() / 1000.0,
@@ -1098,8 +1150,8 @@ class TracePanel(QWidget):
     def get_point_cloud_xyz(self) -> Optional[np.ndarray]:
         return self.point_cloud_xyz
 
-    def get_line_points_px(self):
-        return self.image_viewer.get_line_points()
+    def get_strokes_px(self):
+        return self.image_viewer.get_strokes()
 
-    def get_waypoints(self) -> List[TransformationMatrix]:
-        return self.waypoints
+    def get_paths(self) -> List[List[TransformationMatrix]]:
+        return self.paths
