@@ -1,7 +1,7 @@
 """
 Offline checks for robot.reachability - no robot, no camera, no Zivid runtime.
 
-check_path_reachability talks to the robot through five query methods only, so
+check_paths_reachability talks to the robot through five query methods only, so
 the part worth testing without hardware - which steps get checked, in what
 order, how verdicts and qnear chaining are handed along, what the report
 concludes - can be exercised against a stand-in. What is NOT tested here is
@@ -43,7 +43,7 @@ FLIP_OFFSET_DEG = 60.0
 
 
 class FakeRobot:
-    """The five queries check_path_reachability needs, and not one method more.
+    """The five queries check_paths_reachability needs, and not one method more.
 
     Reach is a sphere of MAX_REACH_MM about the origin; the safety "plane" is z >= floor;
     joint limits are a symmetric range. `flip_x_range` injects a discontinuity in the joint
