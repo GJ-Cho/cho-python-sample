@@ -117,7 +117,11 @@ class M1Sam2TopLayer(Segmenter):
         self.build()
         self.stats = {"top_layer_px": 0, "n_prompts": 0, "n_masks_amg": 0,
                       "n_candidates": 0, "rejected": {"area": 0, "overlap": 0, "no_height": 0}}
+        from core.timing import StageTimer
+
+        timer = StageTimer(self.stats, self.device)  # 구간 시간 (벤치마크용, 결과 무관)
         top_mask, n_up, p_floor = self._top_layer(scene)
+        timer.mark("toplayer")
         top_area = int(top_mask.sum())
         self.stats["top_layer_px"] = top_area
         if top_area == 0:
@@ -131,6 +135,7 @@ class M1Sam2TopLayer(Segmenter):
 
         with torch.inference_mode(), torch.autocast(self.device, dtype=torch.bfloat16):
             masks = amg.generate(scene.rgb)
+        timer.mark("infer")
 
         h_map = roi_mod.height_map(scene, n_up, p_floor)
         f = self.cfg["filter"]
@@ -205,5 +210,6 @@ class M1Sam2TopLayer(Segmenter):
             ))
 
         candidates.sort(key=lambda c: c.score, reverse=True)  # 높이 내림차순
+        timer.mark("post")
         self.stats.update({"n_candidates": len(candidates), "rejected": rejected})
         return candidates

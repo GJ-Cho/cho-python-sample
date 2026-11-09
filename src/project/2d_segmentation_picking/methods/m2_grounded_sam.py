@@ -114,12 +114,17 @@ class M2GroundedSam(Segmenter):
         self.build()
         self.stats = {"top_layer_px": 0, "n_boxes": 0, "n_boxes_nms": 0, "n_candidates": 0,
                       "rejected": {"area": 0, "overlap": 0}}
+        from core.timing import StageTimer
+
+        timer = StageTimer(self.stats, self.device)  # 구간 시간 (벤치마크용, 결과 무관)
         top_mask, n_up, p_floor = self._top_layer(scene)
+        timer.mark("toplayer")
         self.stats["top_layer_px"] = int(top_mask.sum())
         if self.stats["top_layer_px"] == 0:
             return []
 
         results = self._detect_boxes(scene.rgb)
+        timer.mark("detect")
         boxes = results["boxes"].detach().cpu().numpy()
         scores = results["scores"].detach().cpu().numpy()
         labels = results.get("text_labels", results.get("labels"))
@@ -145,6 +150,7 @@ class M2GroundedSam(Segmenter):
         if masks.ndim == 4:
             masks = masks[:, 0]
         masks = masks.astype(bool)
+        timer.mark("sam")
 
         h_map = roi_mod.height_map(scene, n_up, p_floor)
         f = self.cfg["filter"]
@@ -214,5 +220,6 @@ class M2GroundedSam(Segmenter):
             ))
 
         candidates.sort(key=lambda c: c.score, reverse=True)  # 검출 신뢰도 내림차순
+        timer.mark("post")
         self.stats.update({"n_candidates": len(candidates), "rejected": rejected})
         return candidates
