@@ -8,7 +8,10 @@ Zivid 2+ MR130으로 캡처한 2D 이미지 + organized 포인트 클라우드�
 
 전체 설계·결정 근거·폐기된 대안은 [`PLAN.md`](PLAN.md)에 있다. 작업 규칙은 [`CLAUDE.md`](CLAUDE.md).
 
-현재 상태: **Phase 5 진행 중** (m1/m2 세그멘테이션 + 기하 후처리 튜닝 완료, 평가 세트 구축 및 첫 recall 벤치마크 진행 중). Phase 4(파지 포즈)는 그리퍼 스펙 확정 대기, Phase 6(UR3e 연동) 미착수.
+현재 상태 (2026-11-09):
+- **Phase 5 완료** — 실측 [UNK] 12장면 GT 벤치마크 (`scripts/run_benchmark.py`): recall m1 90/119, m2 92/119, warm 1.21 s / 0.92 s.
+- **더 나은 방법 조사 트랙** — 1단계 조사(`research/`) → 2단계 합성 데이터(`synth/`, 3,900장) → 3단계 RF-DETR-Seg 학습·평가(`train/`) [RGB] 완료. 다음은 depth·법선 입력 결합 비교. 상세는 [`train/README.md`](train/README.md).
+- Phase 4(파지 포즈)는 그리퍼 스펙 확정 대기, Phase 6(UR3e 연동) 미착수.
 
 ---
 

@@ -11,3 +11,6 @@ data/
 # build_bin_frame가 자동 생성하는 bin frame 캐시 (bin_roi_*.json 티칭 결과로부터 재계산).
 # RANSAC(난수) 산출물이라 재생성하면 높이 기준이 미세하게 바뀐다 — AGENTS.md "측정·비교 규칙" 참조.
 config/bin_frame*.json
+
+# 학습 출력 (체크포인트·로그). 모델당 약 2GB. train/README.md "이전" 참조.
+runs/

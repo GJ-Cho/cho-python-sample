@@ -254,8 +254,18 @@ src/project/2d_segmentation_picking/
     ├── inspect_zdf.py           # 씬 통계 -> scene_stats.json
     ├── teach_bin_roi.py         # 2D ROI + 림 환형 ROI 티칭 GUI
     ├── run_single.py            # --method m1 --input ... --viz
-    ├── run_benchmark.py         # 3안 순차 실행 -> 타이밍 CSV + 비교표
+    ├── run_benchmark.py         # GT 벤치마크: 방법별 독립 프로세스, recall·과분할·과병합·구간 시간
     └── capture_zivid.py         # 2D+3D 캡처, rgba/rgba_srgb 비교 저장
+```
+
+더 나은 방법 조사 트랙 (2026-10~)으로 추가된 폴더:
+
+```
+├── core/timing.py               # StageTimer — GPU 동기화 후 구간별 시간 기록
+├── research/                    # 1단계 조사: 후보 카드, 시나리오, 주제별 정리 (README가 진입점)
+├── synth/                       # 2단계 BlenderProc 합성 데이터 + 실측 교정 센서 노이즈 (README)
+├── train/                       # 3단계 RF-DETR-Seg 학습·평가, 별도 venv_rfdetr (README)
+└── runs/                        # 학습 출력 (gitignore, 모델당 약 2GB)
 ```
 
 ### 추가 의존성
@@ -286,8 +296,9 @@ Python **3.12 확정** (2026-07-27). Phase 0~1은 글로벌 3.12로 검증했고
 | 3 | **m2 Grounded-SAM 2 세그멘테이션** | 인스턴스 분리 품질 비교 | ✅ 완료 (2026-07-27 구현 `5114dd3`, 2026-07-30 튜닝) — 후보 28/43개, warm 0.92/1.08s (10장) |
 | 3.5 | **기하 후처리** (`core/plane.py`) — XYZ로 RGB 마스크 정련 | 과분할 병합 육안 검증, 사이클 타임 유지 | ✅ 완료 (2026-07-30) — m1 40→30 / 62→50, warm 유지 (11장) |
 | 4 | **파지 어포던스 & 포즈** (m3 재설계 + `pose.py`) — **핑거 그리퍼 기준**, 그리퍼 스펙 확정 후 | 피킹 후보 상위 5개 시각화, 파지 포즈 JSON 출력 | 미착수 (그리퍼 스펙 대기: 개폐 폭, 핑거 두께, TCP). `plane.py`는 3.5에서 선구현 |
-| 5 | `run_benchmark.py` | 세그멘테이션안 타이밍 + `center_px` 비교표 | 미착수 — 10장 "남은 한계"의 정량 지표(recall, 마스크 중복률)를 여기서 도입 |
+| 5 | `run_benchmark.py` — GT 기반 recall·과분할·과병합 + 구간별 warm 시간 | 방법별 독립 프로세스, cold 1회 버림 | ✅ 완료 (2026-08 GT·첫 recall `0662ab3`, 2026-11-08 구간 시간·독립 프로세스) — 실측 [UNK] 12장면 recall m1 90/119, m2 92/119, warm 1.21 / 0.92 s |
 | 6 | UR3e 연동 | 별 브랜치로 분리 | 미착수 |
+| R | **더 나은 방법 조사 트랙** — `research/` → `synth/` → `train/` | 합성 테스트 시나리오별 recall·과분할·과병합·mAP·추론 시간 | 1단계 조사 ✅ (10-29), 2단계 합성 3,900장 ✅ (11-04), 3단계 RF-DETR-Seg [RGB] ✅ (11-09, `train/README.md`). 진행 중: [RGB+D]/[RGB+N]/[RGB+D+N] 입력 결합 비교 |
 
 **순서 변경 이유 (2026-07-27)**: 초기 계획은 석션 전제로 "m3(어포던스)를 먼저" 두었으나, 엔드이펙터가 **핑거 그리퍼**로 바뀌면서 파지 어포던스가 복잡해졌다. **세그멘테이션(m1/m2)은 그리퍼와 무관**하므로 먼저 진행하고, 그리퍼에 의존하는 **파지 어포던스(m3)·포즈는 그리퍼 스펙 확정 후(Phase 4)로 미룬다.** m1/m2는 Phase 1의 `top_layer_mask`(빈 내부 최상층)를 입력 프롬프트 영역으로 사용한다.
 
