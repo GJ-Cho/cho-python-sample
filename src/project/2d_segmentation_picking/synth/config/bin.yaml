@@ -1,0 +1,58 @@
+# [ONE]/[FEW] 빈 피킹 합성 장면 설정 (현재 데모 리그 재현)
+
+camera:
+  model: zivid2plus_mr130
+  width: 1224
+  height: 1024
+  # 핀홀 내부 파라미터 = 실측 점군 피팅 (u = fx·X/Z + cx 최소자승, 왜곡 효과 평균 흡수)
+  #   출처: data/input/20260811_piece_picking_data/00.zdf (Zivid 2+ MR130, SDK 2.18.0)
+  #   참고: estimate_intrinsics 값(fx 2009.28, fy 2008.44, cx 599.20, cy 509.78)은 왜곡 계수
+  #   (K1 -0.0893, K2 0.0321, K3 0.2517)와 짝이라 왜곡 없는 핀홀 렌더에는 쓰지 않는다.
+  fx: 1996.5
+  fy: 1996.6
+  cx: 599.1
+  cy: 509.7
+  distance_m: [1.163, 1.223]   # 실측 바닥까지 1193 mm ± 30
+  tilt_deg: [9.5, 15.5]        # 실측 12.5° ± 3
+  aim_offset_m: 0.03
+  inplane_rot_deg: 3.0
+  flip_180_prob: 0.5
+
+bin:
+  outer_m: [0.62, 0.42]        # 실측 외곽 약 620×420
+  # 빈 깊이: 200 mm(가정, 미측정) 위주 + 300 / 400 mm 일부 (사용자 요청 2026-11-03)
+  height_choices_m: [0.20, 0.30, 0.40]
+  height_probs: [0.6, 0.2, 0.2]
+  # 카메라 거리(distance_m)는 빈 '바닥' 기준으로 유지한다 → 깊은 빈일수록 림이 카메라에 가깝다
+  wall_m: 0.01
+  colors: [[40, 80, 160], [120, 125, 130], [35, 35, 38], [60, 130, 70], [200, 200, 195]]
+
+fill:
+  area_ratio: [0.3, 1.3]       # 빈 바닥 면적 대비 물체 투영 면적 합
+  n_min: 3
+  n_max: 40
+few:
+  n_classes: [2, 5]
+
+physics:
+  drop_above_rim_m: [0.05, 0.35]   # 낙하 시작 높이 = 빈 림 위
+  min_time: 2.0
+  max_time: 8.0
+
+render:
+  samples: 64
+  noise_threshold: 0.05
+  denoiser: OPTIX
+  device: OPTIX
+
+lights:
+  ambient: [0.1, 0.5]
+  n_ceiling: [1, 2]
+  ceiling_height: 3.0
+  ceiling_spread: 1.0
+  ceiling_size: 1.0
+  ceiling_energy: [25, 120]
+  coaxial_prob: 0.8
+  coaxial_energy: [6, 30]
+
+min_visible_px: 80
