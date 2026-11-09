@@ -1,0 +1,80 @@
+# m1 (SAM2 최상층 세그멘테이션) 설정 — PLAN.md 5장 m1
+# 경로는 프로젝트 루트(2d_segmentation_picking) 기준 상대경로 또는 절대경로.
+#
+# 2026-07-30 튜닝: 검출 수 4→40(scene01) / 8→62(scene02), warm 1.01/1.39s(중앙값).
+# 스윕 결론은 PLAN.md 10장 참조. 지배 인자는 top_band_mm > multimask_output
+# > pred_iou/stability > min_overlap 이고, points_per_side는 효율이 가장 낮았다.
+
+sam2:
+  checkpoint: C:/Zivid/3rdparty/checkpoints/sam2.1_hiera_small.pt
+  config: configs/sam2.1/sam2.1_hiera_s.yaml
+  device: cuda
+
+# SAM2 Automatic Mask Generator 파라미터
+amg:
+  points_per_side: 16          # 최상층 bbox 내부 격자 밀도. 시간이 프롬프트 수에 비례하므로
+                               # 밀도보다 밴드 커버리지(top_band_mm)에 예산을 쓰는 편이 이득이다.
+  grid_mode: bbox              # bbox: 최상층 bbox에 격자 / global: 전체 영상에 격자(옛 동작)
+  pred_iou_thresh: 0.70        # 0.80은 흐트러진 파우치/반사 표면을 과도하게 탈락시켰다
+  stability_score_thresh: 0.85 # 동일
+  min_mask_region_area: 200    # AMG 내부 소영역 제거(px)
+  multimask_output: true       # AMG 본래 동작(포인트당 3개 → IoU/stability/NMS로 정리).
+                               # false로 두면 후보가 1/3로 줄어 검출이 급감한다.
+
+# 최상층 ROI (Phase 1 산출물 재사용)
+top_layer:
+  bin_roi: config/bin_roi_01.json
+  bin_frame: config/bin_frame_01.json
+  interior_shrink_mm: 50       # 사면 벽 제외
+  top_band_mm: 120             # 최상층 상대 밴드 두께(ROI 내 p99 기준). 검출 수의 지배 인자.
+                               # 50 = 최상단 한 겹만, 250 ≈ 빈 내부 전체.
+
+# 마스크 필터
+filter:
+  min_area_px: 300             # 너무 작은 마스크 제거
+  max_area_frac: 0.85          # 최상층 면적의 이 비율 초과 마스크 제거(벽/전체 덩어리)
+  min_overlap: 0.15            # 마스크가 최상층에 이 비율 이상 "닿아야" 채택.
+                               # 프롬프트가 이미 최상층 내부에만 있으므로 느슨해도 된다.
+                               # 0.5는 밴드 아래로 이어지는 물체를 통째로 탈락시켰다.
+
+# 기하 후처리 — XYZ로 RGB 세그멘테이션을 정련한다 (PLAN 5장 m1 5·6단계, core/plane.py)
+# enabled: false로 두면 순수 RGB 결과가 나온다(기여도 비교용).
+geometry:
+  enabled: true
+  dedupe_iou: 0.75             # 마스크 IoU가 이 값 초과인 중복 쌍은 점수 높은 쪽만 남긴다.
+                               # AMG의 NMS는 box 기준이라 multimask_output=true에서
+                               # 마스크 수준 중복이 남는다. null이면 끔
+  dedupe_containment: 0.9      # 작은 마스크가 큰 마스크에 이 비율 이상 포함되면 제거.
+                               # IoU(대칭)는 "물체 전체" vs "그 일부만" 쌍을 못 잡는다
+                               # (2026-08-11 GT 진단: 과분할의 거의 전부가 이 패턴)
+  erode_px: 3                  # 평면 피팅 전 침식 — 마스크 경계는 물체/배경 depth가 섞인다
+  max_fit_points: 2000         # 마스크당 피팅 포인트 상한(균일 스트라이드) — 시간 상한 고정
+  inlier_thresh_mm: 1.5        # 이 거리 이내를 인라이어로 본다(트리밍 PCA)
+  trim_iterations: 3           # PCA → 트리밍 → 재피팅 반복 횟수
+  min_plane_points: 50
+
+  merge:                       # 동일 평면 + 경계가 맞닿은 인접 마스크 병합 → 과분할 해소
+    enabled: true
+    normal_deg: 8              # 두 normal의 **상대** 각도차 — 좌표계 무관 (PLAN 4장)
+    offset_mm: 3               # 두 평면의 상대 오프셋
+    dilate_px: 5               # 이 거리 이내로 실제 맞닿은 쌍에만 적용(떨어진 동일평면 제외)
+
+  reject:                      # 절대 임계는 실데이터 분포 확인 전까지 null(끔)
+    require_plane: true        # 유효 XYZ 부족(투명/반사 NaN 홀)으로 피팅 실패한 마스크 기각
+    max_plane_rms_all_mm: null # **전체 포인트 기준** RMS. 인라이어 rms는 inlier_thresh_mm에
+                               # 묶여 판별력이 없다(두 물체를 걸쳐도 작게 나온다)
+    min_inlier_ratio: null     # 지배 평면이 마스크를 설명하는 비율. 낮으면 여러 물체를 걸침
+    max_depth_span_mm: null    # 법선 방향 두께 — 여러 물체를 걸친 마스크 탐지
+    max_tilt_deg: 70           # **bin frame n_up 기준 절대** 기울기 — 빈 사면 벽 잔류 제거용
+                               # PLAN 9장: 연성 파우치는 평면성이 나쁘다. 엄격하면 후보 전멸
+                               # 2026-08-06 실측: 확인된 벽 오검출은 전부 tilt>=81.6도였고
+                               # (scene02 랭킹0/1 등), 정상 물체의 까다로운 지점(상자 모서리,
+                               # 비닐 덮인 뚜껑, 접힌 파우치)은 최대 69.5도였다. 60/75/70을
+                               # 3장면×m1/m2로 스윕(70→75→60 순서로 테스트): 75는 70.6도
+                               # 벽 케이스를 다시 통과시켰고, 60은 정상 물체 6개를 오탈락시켰다.
+                               # 69.5~81.6 사이 자연스러운 간격 안에 드는 70이 최적
+                               # PLAN 9장: 연성 파우치는 평면성이 나쁘다. 엄격하면 후보 전멸
+                               # 2026-08-06: scene02 랭킹0/1이 빈 벽/모서리였던 걸 실측으로
+                               # 확인(tilt 84.2/87.2). 라벨 없이도 정당화되는 순수 기하 제약
+                               # (피킹 가능한 윗면이 up과 거의 수직일 수 없음). 70→75(벽 후보
+                               # 부활)→60 테스트 중 — 75는 scene01 벽 오검출을 되살렸다

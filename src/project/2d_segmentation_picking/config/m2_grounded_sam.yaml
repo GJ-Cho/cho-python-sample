@@ -1,0 +1,66 @@
+# m2 (Grounded-SAM 2) 설정 — PLAN.md 5장 m2
+# Grounding DINO(text→bbox, HF 순수 PyTorch) + SAM2(bbox→mask)
+#
+# 2026-07-30 튜닝: 검출 수 2→28(scene01) / 5→43(scene02), warm 0.92/1.08s(중앙값).
+# (32/48은 max_area_frac 도입 전 수치였다 — 빈 전체를 덮는 마스크가 포함된 값)
+# 지배 인자는 box_threshold(0.30은 대부분을 탈락시켰다) > 프롬프트 어휘 폭.
+# grounding-dino-base는 2.5배 느리면서 동일 threshold에서 tiny보다 낫지 않아 tiny 유지.
+
+grounding_dino:
+  model_id: IDEA-Research/grounding-dino-tiny   # 컴파일 불필요(순수 PyTorch)
+  box_threshold: 0.15   # 0.30은 어수선한 빈에서 물체 대부분을 놓쳤다
+  text_threshold: 0.25
+  box_nms_thresh: 0.7   # 라벨 간 중복 박스 제거(threshold를 낮추면 필수). null이면 끔
+  device: cuda
+
+# 검출 대상 텍스트 프롬프트 (소문자, 마침표로 구분).
+# 어휘가 좁으면 그 어휘에 없는 물체를 통째로 놓친다 — 미지 물체 빈에서는 넓게 쓴다.
+text_prompt: "box. carton. bottle. jar. plastic container. tube. can. pouch. bag.
+  packet. snack package. cosmetic box. lid. cap. jar lid. wrapper. object."
+
+sam2:
+  checkpoint: C:/Zivid/3rdparty/checkpoints/sam2.1_hiera_small.pt
+  config: configs/sam2.1/sam2.1_hiera_s.yaml
+  device: cuda
+
+# 최상층 ROI (Phase 1 산출물) — 후보를 빈 내부 최상층으로 제한
+top_layer:
+  bin_roi: config/bin_roi_01.json
+  bin_frame: config/bin_frame_01.json
+  interior_shrink_mm: 50
+  top_band_mm: 120      # m1과 동일 기준으로 맞춰 비교 가능하게 한다
+
+filter:
+  min_area_px: 300
+  max_area_frac: 0.5   # 최상층 면적의 이 비율 초과 마스크 제거.
+                       # 빈 자체가 "box"로 검출되어 전체를 덮는 것을 막는다(m2에서 실제로 발생).
+  min_overlap: 0.15    # bbox 마스크가 최상층에 이 비율 이상 닿아야 채택
+
+# 기하 후처리 — m1과 동일 코드(core/plane.py refine_masks). 비교 가능하게 기준을 맞춘다.
+geometry:
+  enabled: true
+  dedupe_iou: 0.75           # 라벨이 달라도 마스크가 같은 중복 제거(box NMS로는 남는다)
+  dedupe_containment: null   # 2026-08-11 GT 벤치마크: m1과 달리 m2는 이 규칙이 recall을
+                             # 92→86~87로 깎았다(과분할 18→0은 얻지만 순손실). m2는 박스당
+                             # 마스크 1개라 "같은 물체를 여러 조각으로" 패턴이 아니라
+                             # 실제로 겹친 별개 물체를 잘못 지운 것으로 보여 꺼둔다
+  erode_px: 3
+  max_fit_points: 2000
+  inlier_thresh_mm: 1.5
+  trim_iterations: 3
+  min_plane_points: 50
+
+  merge:
+    enabled: false           # **의도적으로 off**. m2 마스크는 이미 인스턴스 단위이고,
+                             # 겹쳐 쌓인 동일 평면 물체를 병합하면 m2의 장점인 인스턴스
+                             # 분리를 스스로 훼손한다. m1의 과분할 해소와는 상황이 다르다.
+    normal_deg: 8
+    offset_mm: 3
+    dilate_px: 5
+
+  reject:
+    require_plane: true
+    max_plane_rms_all_mm: null
+    min_inlier_ratio: null
+    max_depth_span_mm: null
+    max_tilt_deg: 70           # m1과 동일 근거(2026-08-06 벽 오검출 실측, 69.5~81.6 간격의 70 채택)
