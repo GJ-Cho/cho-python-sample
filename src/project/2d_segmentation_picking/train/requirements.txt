@@ -1,0 +1,14 @@
+# venv_rfdetr (Python 3.12.10) — RF-DETR-Seg 학습·평가 전용. venv_segpick(SAM2·zivid)과 분리한다.
+# torch 는 CUDA 빌드를 먼저 설치:
+#   pip install torch==2.6.0 torchvision==0.21.0 --index-url https://download.pytorch.org/whl/cu124
+# 그다음:
+#   pip install -r train/requirements.txt
+rfdetr[train,loggers]==1.12.0
+pytorch-lightning==2.6.6
+supervision==0.31.5
+pycocotools==2.0.11
+opencv-python==5.0.0.93
+numpy==2.5.4
+pillow==13.0.0
+PyYAML==6.0.3
+scipy==1.18.1

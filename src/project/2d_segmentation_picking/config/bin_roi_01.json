@@ -1,0 +1,25 @@
+{
+  "rim_outer_corners_rc": [
+    [
+      99,
+      117
+    ],
+    [
+      121,
+      1194
+    ],
+    [
+      879,
+      1161
+    ],
+    [
+      855,
+      104
+    ]
+  ],
+  "rim_band_mm": 20.0,
+  "input": "C:\\Zivid\\cho-python-sample\\src\\project\\2d_segmentation_picking\\data\\input\\image_test.zdf",
+  "annulus_px": 126458,
+  "annulus_valid_px": 78751,
+  "note": "rim_outer_corners_rc는 [row,col] 시계방향. 밴드는 로드 시 재계산."
+}
