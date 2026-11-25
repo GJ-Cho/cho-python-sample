@@ -115,7 +115,7 @@ python -m line_tracing_gui._dev_test_reachability
 python -m line_tracing_gui._dev_test_projection
 ```
 
-마지막 것은 **eye-to-hand 회귀 가드**입니다. eye-to-hand가 먼저 실기 검증됐고 eye-in-hand를 그 위에
+`_dev_test_eye_to_hand_regression`은 **eye-to-hand 회귀 가드**입니다. eye-to-hand가 먼저 실기 검증됐고 eye-in-hand를 그 위에
 얹었기 때문에, eye-in-hand 쪽 수정이 eye-to-hand 웨이포인트를 조용히 움직일 수 있습니다. 이 테스트가
 `camera_to_base`가 정확히 hand-eye 변환뿐임을 불변식으로 확인하고, 샘플 점군 기준 golden 값과도
 대조합니다. eye-in-hand를 손댄 뒤에는 한 번 돌려보세요.
