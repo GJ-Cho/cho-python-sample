@@ -1,6 +1,6 @@
 # AGENTS.md — Line Tracing GUI
 
-> 상위 `cho-python-sample/AGENT.md`(Zivid 규칙)와 전역 지침을 상속합니다. 여기엔 이 폴더 고유 규칙만 씁니다.
+> 상위 `cho-python-sample/AGENTS.md`(Zivid 규칙)와 전역 지침을 상속합니다. 여기엔 이 폴더 고유 규칙만 씁니다.
 
 UR3e(뾰족한 그리퍼) + Zivid 3D 카메라로, 캡처한 2D 이미지 위에 사용자가 그린 라인을
 실제 표면에 수직으로 접촉하며 따라가게 하는 PyQt5 GUI다.
