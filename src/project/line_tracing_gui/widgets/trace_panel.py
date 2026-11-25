@@ -47,6 +47,12 @@ from line_tracing_gui.geometry.projection import (
     build_projector_image,
 )
 from line_tracing_gui.geometry.waypoint_builder import DEFAULT_SAMPLE_SPACING_MM, build_paths
+from line_tracing_gui.robot.execution import (
+    STOPPED_BY_USER_MESSAGE,
+    ExecutionStopped,
+    move_with_monitoring,
+    run_execution_sequence,
+)
 from line_tracing_gui.robot.reachability import ReachabilityReport, check_paths_reachability
 from line_tracing_gui.robot.robot_control_ur_rtde import DEFAULT_JOINT_ACCELERATION, DEFAULT_JOINT_SPEED
 from line_tracing_gui.theme import mark_as_accent, mark_as_danger
@@ -79,6 +85,9 @@ EXEC_BLEND_MIN_MM = 0.0
 EXEC_BLEND_MAX_MM = 20.0
 
 MONITOR_POLL_INTERVAL_S = 0.05
+# Pause between processEvents() calls while the GUI thread waits for a worker, so the wait
+# keeps the UI responsive without spinning a core at 100%.
+GUI_WAIT_SLEEP_S = 0.01
 
 # How far the robot may sit from the capture pose before the projection is treated as stale.
 # Comfortably above the arm's own repeatability and pose-read noise, and far below anything
@@ -119,6 +128,10 @@ class TracePanel(QWidget):
         # zivid.projection.ProjectedImage while the projector is on. Projection also stops by
         # itself when a capture starts on the same camera, so this is cleared there too.
         self._projected_image = None
+        # Set by Stop and watched by the execution worker (robot.execution); a fresh one per run.
+        self._abort_event: Optional[threading.Event] = None
+        # (button, enabled before the lock) for every control locked while execution runs.
+        self._locked_button_states: List[tuple] = []
 
         splitter = QSplitter(Qt.Horizontal)
         splitter.addWidget(self._build_2d_panel())
@@ -570,6 +583,10 @@ class TracePanel(QWidget):
     def _update_execute_button_state(self) -> None:
         # The reachability check needs exactly what execution needs - waypoints and a live
         # robot to ask - so the two buttons share one enabling rule.
+        if self._locked_button_states:
+            # Execution is running and owns these buttons; a camera/robot signal arriving
+            # meanwhile must not re-enable them. Unlocking calls this again afterwards.
+            return
         has_waypoints = bool(self.paths)
         ready = has_waypoints and self.robot_connection_widget.connected
         self.execute_button.setEnabled(ready)
@@ -661,6 +678,7 @@ class TracePanel(QWidget):
         thread.start()
         while thread.is_alive():
             QApplication.processEvents()
+            time.sleep(GUI_WAIT_SLEEP_S)
         success, message = result_queue.get()
 
         self.robot_connection_widget.resume_polling()
@@ -752,6 +770,7 @@ class TracePanel(QWidget):
         thread.start()
         while thread.is_alive():
             QApplication.processEvents()
+            time.sleep(GUI_WAIT_SLEEP_S)
         report: ReachabilityReport = result_queue.get()
 
         self.robot_connection_widget.resume_polling()
@@ -983,72 +1002,77 @@ class TracePanel(QWidget):
 
     def _move_with_monitoring(self, robot_control, move_fn, *args, **kwargs) -> None:
         """Run one move asynchronously and poll pose/joints until it finishes, emitting
-        live_pose_updated/live_joints_updated along the way (see class docstring)."""
-        kwargs["asynchronous"] = True
-        move_fn(*args, **kwargs)
-        time.sleep(MONITOR_POLL_INTERVAL_S)
-        while robot_control.is_moving():
-            self.live_pose_updated.emit(robot_control.get_pose().pose)
-            time.sleep(MONITOR_POLL_INTERVAL_S)
-        self.live_pose_updated.emit(robot_control.get_pose().pose)
-        self.live_joints_updated.emit(robot_control.get_joint_positions())
+        live_pose_updated/live_joints_updated along the way (see class docstring). Raises if
+        the arm came to rest because of a stop rather than arriving (robot.execution)."""
+        move_with_monitoring(
+            robot_control,
+            move_fn,
+            *args,
+            on_pose=self.live_pose_updated.emit,
+            on_joints=self.live_joints_updated.emit,
+            poll_interval_s=MONITOR_POLL_INTERVAL_S,
+            **kwargs,
+        )
 
-    def _run_execution(
-        self,
-        result_queue: "queue.Queue",
-        robot_control,
-        paths: List[List[TransformationMatrix]],
-        approach_poses: List[TransformationMatrix],
-        retreat_poses: List[TransformationMatrix],
-        speed_m_s: float,
-        acceleration: float,
-        blend_m: float,
-        home_joints: Optional[List[float]],
-    ) -> None:
-        """Worker body for the execution sequence.
+    def _run_execution(self, result_queue: "queue.Queue", abort_event: threading.Event, **sequence_kwargs) -> None:
+        """Worker body for the execution sequence (robot.execution.run_execution_sequence).
 
         Everything it needs is passed in: Qt widgets belong to the GUI thread, and reading a
         spin box from a worker while the GUI thread spins in processEvents is what hung the
         reachability check under test. The same rule holds here.
 
-        It must also always put exactly one result on the queue - the caller blocks on that
-        queue, so a worker that dies before reporting would hang the GUI. Hence the try
-        covering the whole body, argument validation included.
+        It must also always put exactly one (success, message) on the queue - the caller
+        blocks on that queue, so a worker that dies before reporting would hang the GUI.
+        Hence the try covering the whole body, argument validation included. Stop is
+        reported as a non-success with STOPPED_BY_USER_MESSAGE.
         """
         try:
-            if robot_control is None:
-                raise RuntimeError("Robot is not connected.")
-
-            if home_joints is not None:
-                self._move_with_monitoring(
-                    robot_control, robot_control.move_to_joints, home_joints,
-                    speed=DEFAULT_JOINT_SPEED, acceleration=DEFAULT_JOINT_ACCELERATION,
-                )
-            # Every path is approached and retreated on its own. Travelling from the end of
-            # one line to the start of the next has to happen off the surface, or the tip
-            # drags across the part on the way.
-            for path, approach_pose, retreat_pose in zip(paths, approach_poses, retreat_poses):
-                self._move_with_monitoring(
-                    robot_control, robot_control.move_j, robot_control.get_custom_target(approach_pose),
-                    speed=DEFAULT_JOINT_SPEED, acceleration=DEFAULT_JOINT_ACCELERATION,
-                )
-                self._move_with_monitoring(
-                    robot_control, robot_control.move_path, path,
-                    speed=speed_m_s, acceleration=acceleration, blend_radius=blend_m,
-                )
-                self._move_with_monitoring(
-                    robot_control, robot_control.move_j, robot_control.get_custom_target(retreat_pose),
-                    speed=DEFAULT_JOINT_SPEED, acceleration=DEFAULT_JOINT_ACCELERATION,
-                )
-            if home_joints is not None:
-                self._move_with_monitoring(
-                    robot_control, robot_control.move_to_joints, home_joints,
-                    speed=DEFAULT_JOINT_SPEED, acceleration=DEFAULT_JOINT_ACCELERATION,
-                )
-            traced = f"{len(paths)} lines" if len(paths) > 1 else "1 line"
-            result_queue.put((True, f"Done - {traced}, {sum(len(path) for path in paths)} waypoints"))
+            message = run_execution_sequence(
+                abort_event=abort_event,
+                on_pose=self.live_pose_updated.emit,
+                on_joints=self.live_joints_updated.emit,
+                joint_speed=DEFAULT_JOINT_SPEED,
+                joint_acceleration=DEFAULT_JOINT_ACCELERATION,
+                poll_interval_s=MONITOR_POLL_INTERVAL_S,
+                **sequence_kwargs,
+            )
+            result_queue.put((True, message))
+        except ExecutionStopped:
+            result_queue.put((False, STOPPED_BY_USER_MESSAGE))
         except Exception as ex:  # pylint: disable=broad-except
             result_queue.put((False, str(ex)))
+
+    def _robot_touching_buttons(self) -> List[QPushButton]:
+        """Every button that moves the robot, talks to the controller, or changes what would
+        be executed. All of them are locked while execution runs - Stop is the only control
+        left live - so nothing can issue a second command alongside the running sequence."""
+        return [
+            self.capture_button,
+            self.generate_waypoints_button,
+            self.set_home_button,
+            self.move_home_button,
+            self.check_reachability_button,
+            self.project_button,
+            self.execute_button,
+            self.calibration_panel.read_capture_pose_button,
+            self.calibration_panel.move_to_capture_pose_button,
+            self.robot_connection_widget.connect_button,
+            self.robot_connection_widget.reconnect_button,
+            self.robot_connection_widget.test_move_button,
+            self.robot_connection_widget.apply_tcp_button,
+        ]
+
+    def _lock_robot_controls(self) -> None:
+        # Remember each button's own state so unlocking does not enable one that was
+        # disabled for an unrelated reason (no camera, no waypoints, ...).
+        self._locked_button_states = [(button, button.isEnabled()) for button in self._robot_touching_buttons()]
+        for button, _ in self._locked_button_states:
+            button.setEnabled(False)
+
+    def _unlock_robot_controls(self) -> None:
+        for button, was_enabled in self._locked_button_states:
+            button.setEnabled(was_enabled)
+        self._locked_button_states = []
 
     def _min_waypoint_spacing_mm(self) -> float:
         """Tightest gap between neighbouring waypoints anywhere in any path.
@@ -1143,7 +1167,7 @@ class TracePanel(QWidget):
         # The line is about to be traced for real, and on eye-in-hand the moving arm carries
         # the camera off the capture pose, so anything still projected would be misleading.
         self._stop_projection()
-        self.execute_button.setEnabled(False)
+        self._lock_robot_controls()
         self.stop_button.setEnabled(True)
         self.execution_status_label.setText("Running...")
         self.robot_connection_widget.pause_polling()
@@ -1163,25 +1187,41 @@ class TracePanel(QWidget):
         }
 
         result_queue: "queue.Queue" = queue.Queue()
+        self._abort_event = threading.Event()
         thread = threading.Thread(
-            target=self._run_execution, args=(result_queue,), kwargs=execution_kwargs
+            target=self._run_execution, args=(result_queue, self._abort_event), kwargs=execution_kwargs
         )
         thread.start()
         while thread.is_alive():
             QApplication.processEvents()
+            time.sleep(GUI_WAIT_SLEEP_S)
         success, message = result_queue.get()
 
-        self.robot_connection_widget.resume_polling()
         self.stop_button.setEnabled(False)
+        self._unlock_robot_controls()
+        self.robot_connection_widget.resume_polling()
         self._update_execute_button_state()
         if success:
             self.execution_status_label.setText("Done")
             QMessageBox.information(self, "Execution Complete", message)
+        elif message == STOPPED_BY_USER_MESSAGE:
+            self.execution_status_label.setText(STOPPED_BY_USER_MESSAGE)
+            QMessageBox.warning(
+                self,
+                "Execution Stopped",
+                f"{STOPPED_BY_USER_MESSAGE}. The rest of the sequence (retreat, remaining lines, home) "
+                "was not run.\nThe tip may still be at or near the surface - move the robot clear "
+                "with care.",
+            )
         else:
             self.execution_status_label.setText(f"Failed: {message}")
             QMessageBox.warning(self, "Execution Failed", message)
 
     def on_stop_clicked(self) -> None:
+        # Flag first, then stop: the worker must see the flag by the time the arm is at rest,
+        # or it would read the stop as an arrival and issue the next move.
+        if self._abort_event is not None:
+            self._abort_event.set()
         robot_control = self.robot_connection_widget.robot_control
         if robot_control is not None:
             robot_control.stop()

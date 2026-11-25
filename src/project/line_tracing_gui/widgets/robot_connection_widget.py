@@ -12,6 +12,7 @@ moves) but talks directly to RobotControlURRTDE.
 
 import queue
 import threading
+import time
 from typing import Optional, Tuple
 
 import numpy as np
@@ -48,6 +49,9 @@ TEST_MOVE_OFFSET_MM = 10.0
 TEST_MOVE_VELOCITY = 0.02  # m/s, deliberately slow for a first verification move
 TEST_MOVE_ACCELERATION = 0.1  # m/s^2
 TCP_FIELD_WIDTH_PX = 76
+# Pause between processEvents() calls while waiting for a move thread, so the wait does not
+# spin a core at 100%.
+GUI_WAIT_SLEEP_S = 0.01
 
 
 class RobotConnectionWidget(QWidget):
@@ -275,6 +279,7 @@ class RobotConnectionWidget(QWidget):
         move_thread.start()
         while move_thread.is_alive():
             QApplication.processEvents()
+            time.sleep(GUI_WAIT_SLEEP_S)
         self.resume_polling()
         return result_queue.get()
 
@@ -360,6 +365,7 @@ class RobotConnectionWidget(QWidget):
         move_thread.start()
         while move_thread.is_alive():
             QApplication.processEvents()
+            time.sleep(GUI_WAIT_SLEEP_S)
         success, result = self.result_queue.get()
         self.resume_polling()
         self.test_move_button.setStyleSheet("")

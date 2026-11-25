@@ -31,7 +31,7 @@ IS_MOVING_SPEED_THRESHOLD = 1e-3  # m/s and rad/s, on the combined 6-vector norm
 
 # Numeric robot/safety mode values reported by RTDE, from Universal Robots' RTDE guide
 # ("Real-Time Data Exchange (RTDE) Guide", robot_mode / safety_mode fields). Only used to
-# turn a bare integer into readable text in describe_motion_failure(); an unrecognized
+# turn a bare integer into readable text in motion_health_problem(); an unrecognized
 # value degrades to "unknown (<n>)" rather than failing.
 ROBOT_MODE_NAMES = {
     -1: "no controller",
@@ -60,6 +60,9 @@ SAFETY_MODE_NAMES = {
     12: "automatic mode safeguard stop",
     13: "system three position enabling stop",
 }
+ROBOT_MODE_RUNNING = 7
+# Normal and reduced: the only safety modes in which the arm keeps executing motion.
+SAFETY_MODES_ALLOWING_MOTION = (1, 2)
 
 
 class SimpleRobotConfiguration:
@@ -230,17 +233,17 @@ class RobotControlURRTDE(RobotControl):
             and self.rtde_receive.isConnected()
         )
 
-    def describe_motion_failure(self) -> str:
-        """Why a move just returned False, as a short human-readable clause.
+    def motion_health_problem(self) -> Optional[str]:
+        """Why the robot cannot be trusted to have finished a move, or None if it is healthy.
 
-        moveL/moveJ/movePath only report a bare boolean, so without this every failure
-        reads the same regardless of cause. The checks are ordered by how often they are
-        the real cause: a dead RTDE control script (isProgramRunning() False) is the top
-        candidate - it is what a `moveJ (to joints) failed` on an otherwise healthy robot
-        has looked like here - followed by the stops, then the raw modes.
+        An asynchronous move is watched until the arm is at rest, but a protective stop or an
+        emergency stop also brings it to rest - so after every move this is asked whether the
+        robot is still running normally. "Healthy" means: RTDE connected, the RTDE control
+        script still running, no e-stop / protective stop, robot mode running, and safety
+        mode normal or reduced (reduced mode slows the arm down but does not stop it).
 
-        Never raises: this runs on the failure path, where a second exception would hide
-        the original one.
+        Never raises: a state that cannot be read back is reported as a problem, since the
+        move cannot be confirmed either.
         """
         try:
             self._require_connected()
@@ -260,16 +263,40 @@ class RobotControlURRTDE(RobotControl):
             safety_mode = int(self.rtde_receive.getSafetyMode())
             robot_mode_name = ROBOT_MODE_NAMES.get(robot_mode, f"unknown ({robot_mode})")
             safety_mode_name = SAFETY_MODE_NAMES.get(safety_mode, f"unknown ({safety_mode})")
-            if robot_mode != 7:  # 7 = running; anything else cannot execute motion
+            if robot_mode != ROBOT_MODE_RUNNING:
                 return f"the robot is not running (robot mode: {robot_mode_name}, safety mode: {safety_mode_name})"
-            if safety_mode != 1:  # 1 = normal
+            if safety_mode not in SAFETY_MODES_ALLOWING_MOTION:
                 return f"the safety mode is {safety_mode_name}, not normal"
-            return (
-                f"the robot reports itself healthy (robot mode: {robot_mode_name}, safety mode: "
-                f"{safety_mode_name}) - the target was most likely unreachable or outside a safety limit"
-            )
+            return None
+        except Exception as ex:  # pylint: disable=broad-except
+            return f"the robot state could not be read back ({ex})"
+
+    def describe_motion_failure(self) -> str:
+        """Why a move just returned False, as a short human-readable clause.
+
+        moveL/moveJ/movePath only report a bare boolean, so without this every failure
+        reads the same regardless of cause. The checks (see motion_health_problem) are
+        ordered by how often they are the real cause: a dead RTDE control script
+        (isProgramRunning() False) is the top candidate - it is what a `moveJ (to joints)
+        failed` on an otherwise healthy robot has looked like here - followed by the
+        stops, then the raw modes.
+
+        Never raises: this runs on the failure path, where a second exception would hide
+        the original one.
+        """
+        problem = self.motion_health_problem()
+        if problem is not None:
+            return problem
+        try:
+            assert self.rtde_receive is not None
+            robot_mode_name = ROBOT_MODE_NAMES.get(int(self.rtde_receive.getRobotMode()), "unknown")
+            safety_mode_name = SAFETY_MODE_NAMES.get(int(self.rtde_receive.getSafetyMode()), "unknown")
         except Exception as ex:  # pylint: disable=broad-except
             return f"the cause could not be read back from the robot ({ex})"
+        return (
+            f"the robot reports itself healthy (robot mode: {robot_mode_name}, safety mode: "
+            f"{safety_mode_name}) - the target was most likely unreachable or outside a safety limit"
+        )
 
     def _motion_failed(self, what: str) -> RuntimeError:
         return RuntimeError(f"{what} failed: {self.describe_motion_failure()}.")

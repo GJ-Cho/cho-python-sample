@@ -285,6 +285,44 @@ It has conflicting versions of Qt on some platforms.
 `DEFAULT_JOINT_ACCELERATION`(0.3 rad/s²)이고 GUI에 노출되어 있지 않다. 선이 많을수록 사이클 타임에서
 차지하는 비중이 커지지만, 자유 공간에서 팔이 더 빠르게 휘두르는 변경이라 함께 올리지 않았다.
 
+### 12. Stop은 시퀀스 전체를 끝낸다 / 안전 정지는 실패다 (`robot/execution.py`)
+
+실행은 모든 이동을 비동기로 보내고 `is_moving()`이 false가 될 때까지 기다린다. 그런데 **멈춘 팔과 도착한
+팔은 이 관점에서 똑같이 보인다.** 그래서 이전 코드는 두 가지를 놓치고 있었다(코드 판독으로 발견, 실기에서
+재현하지는 않음):
+
+- **Stop 후에도 시퀀스가 계속됐다.** `on_stop_clicked`는 `stopL`만 보냈고 워커에는 중단 신호가 없었다.
+  팔이 서면 "구간 완료"로 읽고 곧바로 후퇴 → 다음 라인 → 홈을 내보냈다.
+- **보호정지/비상정지도 "완료"로 처리됐다.** 비동기 이동은 실패를 반환값으로 알려주지 않는다.
+
+지금은:
+
+- `threading.Event`(abort 플래그)를 실행마다 새로 만든다. Stop은 **플래그를 먼저 세우고** 정지를 보낸다.
+  워커는 이동을 내보내기 전과 팔이 멈춘 뒤에 플래그를 확인하고, 세워져 있으면 `ExecutionStopped`로
+  시퀀스를 끝낸다 — **후퇴도, 다음 라인도, 홈도 내보내지 않는다.** GUI에는 성공이 아닌
+  `Stopped by user`로 표시된다.
+- 플래그 확인과 이동 전송 사이에 Stop이 눌리면 정지 명령이 이동보다 먼저 컨트롤러에 도착할 수 있으므로,
+  이동을 보낸 직후 플래그가 서 있으면 정지를 한 번 더 보낸다.
+- 팔이 멈출 때마다 `RobotControlURRTDE.motion_health_problem()`으로 로봇 상태를 다시 읽는다. RTDE 연결,
+  RTDE 제어 스크립트 실행 중(`isProgramRunning`), `isEmergencyStopped`/`isProtectiveStopped` 아님,
+  robot mode = running(7), safety mode = normal(1) 또는 reduced(2) — 하나라도 아니면 그 이동의 실패로
+  올린다. reduced는 감속만 할 뿐 멈추지 않으므로 정상으로 본다. 상태를 읽지 못해도 실패로 본다(완료를
+  확인할 수 없으므로). 사용한 API는 설치된 `ur_rtde` 1.6.5에 있는 것만 썼다.
+- 실행 중에는 Stop을 제외한 로봇 관련 버튼(Capture, Generate Waypoints, Set/Move Home, Check
+  Reachability, Project, Execute, Read From Robot, Move To Capture Pose, Connect/Reconnect, Round-Trip
+  Test, TCP Apply)을 잠그고, 결과와 관계없이 끝나면 **잠그기 전 상태로** 되돌린다. 같은 `robot_control`에
+  두 번째 명령이 동시에 들어가지 않게 하기 위함이다.
+- 워커를 기다리는 `while thread.is_alive(): processEvents()` 루프에 10 ms sleep을 넣어 CPU 100% 점유를
+  없앴다.
+
+**Stop 후 팔은 그 자리에 선다.** 라인 중간이면 팁이 표면에 닿아 있거나 매우 가깝다. 자동으로 후퇴하지
+않는 것은 의도다 — 사용자가 Stop을 누른 이유(충돌 직전, 잘못된 경로 등)를 소프트웨어가 알 수 없으므로,
+"멈춤"이 "다른 곳으로 움직임"이 되어서는 안 된다. 빼내는 것은 사람이 판단해서 한다.
+
+이 로직은 Qt·zivid 없이 `robot/execution.py`에 있고, `_dev_test_execution`이 스텁 로봇으로 Stop 시점별
+(트레이싱 중 / 다음 라인 접근 중 / 이동 전송 순간 / 시작 전)·보호정지·비상정지 시나리오와
+`motion_health_problem` 판정을 확인한다.
+
 ## 현재 상태
 
 Connect / Calibration / Line Tracing 3탭 모두 동작 확인됨 (카메라 캡처, 라인 드로잉, 웨이포인트 생성
@@ -317,6 +355,14 @@ Move To Capture Pose도 캡처 없이 쓸 수 있다. **이미 캡처로 기록�
 같이 고친 잠재 결함: `_camera_to_base_transform`이 `eye_in_hand`를 확인하지 않아서, eye-in-hand로
 작업한 뒤 eye-to-hand로 바꾸면 남아 있는 캡처 pose를 계속 곱했다. `build_waypoints`는 그걸 무시하므로
 3D 프리뷰와 투사가 실제로 실행될 경로와 어긋나게 된다.
+
+**남은 실기 확인 항목** (Stop / 안전 정지, 결정 #12): 저속(예: 10 mm/s)으로, 비상정지 버튼을 손에 닿는
+곳에 두고 확인할 것. (1) 트레이싱 중 Stop → 팔이 그 자리에 서고 후퇴·다음 라인·홈으로 가지 않는지, GUI에
+`Stopped by user`가 뜨는지. (2) 접근(moveJ) 중 Stop → `stopL`이 moveJ도 정상 감속 정지시키는지. (3) 트레이싱
+중 보호정지 유발(팬던트 또는 가벼운 접촉) → `Execution Failed`에 보호정지 원인이 표시되고 이후 이동이 없는지.
+(4) 실행 중 다른 버튼이 잠기고, 끝나면 원래 상태로 돌아오는지. (5) 비동기 이동 직후 첫 폴링(50 ms) 시점에
+팔이 아직 출발하지 않아 `is_moving()`이 false로 읽히는 경우가 없는지 — 그러면 이동 하나를 건너뛴 것으로
+읽힌다(이번 변경 전부터 있던 가정).
 
 **남은 실기 확인 항목** (프로젝팅 관련): 검증 순서: (1) 캡처 pose에서
 선이 실제 의도한 자리에 떨어지는지 → (2) 통과하면 로봇을 옮겨 보정 투사로 hand-eye 체인까지 확인.

@@ -113,6 +113,7 @@ python -m line_tracing_gui._dev_test_drawable_viewer
 python -m line_tracing_gui._dev_test_eye_to_hand_regression
 python -m line_tracing_gui._dev_test_reachability
 python -m line_tracing_gui._dev_test_projection
+python -m line_tracing_gui._dev_test_execution
 ```
 
 `_dev_test_eye_to_hand_regression`은 **eye-to-hand 회귀 가드**입니다. eye-to-hand가 먼저 실기 검증됐고 eye-in-hand를 그 위에
@@ -131,7 +132,16 @@ python -m line_tracing_gui._dev_test_projection
 투사 불가 지점에서 **선을 잇지 않고 끊는지**)를 전부 확인합니다. 매핑 자체가 빛이 실제로 떨어지는
 자리와 맞는지는 여기서 알 수 없습니다.
 
+`_dev_test_execution`은 **Stop과 안전 정지 처리**를 스텁 로봇으로 검증합니다. Stop을 누른 뒤에는 후퇴·다음
+라인·홈을 포함해 어떤 이동도 내보내지 않는지, 보호정지·비상정지로 팔이 멈춘 것을 완료가 아니라 실패로
+보고하는지 확인합니다.
+
 ## 안전
+
+**Stop**을 누르면 팔은 그 자리에서 멈추고 시퀀스는 거기서 끝납니다(후퇴·남은 라인·홈 모두 실행하지 않음).
+라인 중간이었다면 팁이 표면에 닿아 있거나 가까우니, 로봇을 빼낼 때 주의하세요. 실행 중에는 Stop 외의 로봇
+관련 버튼이 잠깁니다. 보호정지·비상정지로 팔이 멈춘 경우는 `Execution Failed`로 원인과 함께 표시됩니다.
+
 
 이 GUI는 **순수 위치 제어**입니다 — force/torque로 실제 접촉을 감지하지 않고, 사전에 계산된 좌표로
 이동할 뿐입니다. 캘리브레이션 오차나 표면 굴곡이 있으면 그리퍼가 과도하게 파고들거나 허공에서 멈출 수
